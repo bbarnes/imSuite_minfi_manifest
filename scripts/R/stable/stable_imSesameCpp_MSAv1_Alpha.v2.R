@@ -1,0 +1,3644 @@
+
+# ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+#
+#                Script for Screen Probe Analytical Performance
+#
+# ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+
+# ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+#                              Source Packages::
+# ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+
+rm(list=ls(all=TRUE))
+
+# Options, Tidy Practices and Parallel Computing Packages::
+suppressWarnings(suppressPackageStartupMessages( 
+  base::require("optparse",   quietly = TRUE) ) )
+suppressWarnings(suppressPackageStartupMessages( 
+  base::require("tidyverse",  quietly = TRUE) ) )
+
+# ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+#                Set Run Environment:: RStudio/Command-Line
+#                            Source All Functions
+# ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+
+par  <- list()
+args <- commandArgs(trailingOnly = FALSE)
+
+par$src_path <- NULL
+par$run_mode <- args[1]
+par$date_str <- Sys.Date() %>% as.character()
+par$prgm_dir <- 'stable'
+par$prgm_tag <- 'stable_imSesameCpp_MSAv1_Alpha'
+par$verbose  <- 3
+local_paths  <- c( 
+  # "/Users/bbarnes/Documents/tools/imSuite/scripts/R",
+  "/Users/bbarnes/mylocal/Documents/tools/imSuite/scripts/R",
+  NULL
+)
+
+if ( par$run_mode == "RStudio" ) {
+  for (path in local_paths) if ( dir.exists(path) ) par$src_path <- path
+} else {
+  par$exe_path <- 
+    base::normalizePath( base::substring( args[grep("--file=", args)], 8 ) )
+  par$scr_path <- base::dirname( par$exe_path )
+  par$src_path <- base::dirname( par$scr_path )
+  par$run_mode <- 'Command_Line'
+}
+stopifnot( length(par$src_path) > 0 )
+stopifnot( dir.exists(par$src_path) )
+
+par$fun_path <- file.path( par$src_path, "functions" )
+stopifnot( dir.exists(par$fun_path) )
+
+src_ret <- base::lapply( base::list.files( 
+  par$fun_path, pattern = "\\.R$", full.names = TRUE ), source )
+par <- source_functions( pars = par, rcpp = FALSE, vb = par$verbose )
+par <- params_check( pars = par, args = args, 
+                     prgm_aux_check = FALSE, vb = par$verbose )
+
+# ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+#                           Get Program Options::
+# ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+
+par$version <- 0
+
+# par$run_name <- "EPICv1"
+# par$run_name <- "Embarkv1"
+# par$run_name <- "FAILv1"
+# par$run_name <- "COREv1"
+#
+# par$run_name <- "MSAv03"
+par$run_name <- "MSAv10"
+
+opt <- NULL
+opt <- imProbeQC_options( pars = par, args = args, vb = par$verbose )
+vb  <- opt$verbose
+vt  <- 0
+tc  <- 0
+
+p0  <- vb > vt + 0
+p1  <- vb > vt + 1
+p2  <- vb > vt + 2
+p4  <- vb > vt + 4
+p8  <- vb > vt + 8
+
+# ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+#                         Program Initialization::
+# ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+
+par_reqs <- c( 'run_mode', 
+               'src_path', 'scr_path', 'exe_path', 'prgm_dir', 'prgm_tag' )
+opt_reqs <- c( 'out_path', 
+               'Rscript', 'verbose' )
+
+opt$rcpp <- 0
+opt$rcpp <- 2
+opt$rcpp <- 3
+prgm_dat <- program_init( name = par$prgm_tag,
+                          opts = opt, opt_reqs = opt_reqs,
+                          pars = par, par_reqs = par_reqs, 
+                          rcpp = opt$rcpp,
+                          vb = opt$verbose, vt=3, tc=0 )
+
+opt <- prgm_dat$opt
+par <- prgm_dat$par
+opt_tib <- prgm_dat$opt_tib
+par_tib <- prgm_dat$par_tib
+
+# ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+#                    Pre-processing:: Initialize Run Objects
+# ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+
+tt <- timeTracker$new()
+
+pmssg <- glue::glue("[{par$prgm_tag}]:")
+pwarn <- glue::glue("{RET}[{par$prgm_tag}]: Warning:")
+perrs <- glue::glue("{RET}[{par$prgm_tag}]: ERROR:")
+
+success = TRUE;
+
+# ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+#             Pre-processing:: Sample Sheet (MSA.v.1.0) Alpha
+# ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+
+ssh_tib <- NULL
+ssh_csv <- file.path( opt$top_path, "Projects.new/MSA/data/MSA-Alpha-CHOP/AlphaData-07122023_PreDVT_SGrun/Samplesheet_48x1_preDVT_072023-SMG-Verbose.csv.gz" )
+ssh_tib <- readr::read_csv( file = ssh_csv, skip = 7, show_col_types = FALSE ) %>% 
+  dplyr::select( Sentrix_ID,Sentrix_Position,Sample_Group,Sample,'DNA Input' ) %>% 
+  magrittr::set_names( c("Sentrix_ID","Sentrix_Pos","Sample_Group","Sample_Name","Sample_Input") ) %>%
+  tidyr::unite( Sentrix_Name, Sentrix_ID,Sentrix_Pos, sep="_", remove=TRUE ) %>%
+  dplyr::mutate(
+    Sample_Group = Sample_Group %>% stringr::str_remove_all(" "),
+    Sample_GroupKey = dplyr::case_when(
+      Sample_Group == "Blood"    ~ "B",
+      Sample_Group == "CellLine" ~ "L",
+      Sample_Group == "Control"  ~ "T",
+      Sample_Group == "Coriell"  ~ "C",
+      Sample_Group == "FFPE"     ~ "F",
+      TRUE ~ NA_character_
+    ),
+    Sample_Input = Sample_Input %>% stringr::str_remove("ng$") %>% as.integer(),
+    Sample_InputKey = dplyr::case_when(
+      Sample_Input == 50  ~ "05",
+      Sample_Input == 250 ~ "25",
+      TRUE ~ NA_character_
+    ),
+    Sample_Titration = dplyr::case_when(
+      Sample_Name == "0% Epigen Control"   ~ 0.0,
+      Sample_Name == "50% Epigen Control"  ~ 50.0,
+      Sample_Name == "100% Epigen Control" ~ 100.0,
+      TRUE ~ 0.0
+    ) %>% as.integer(),
+    Sample_NameKey = dplyr::case_when(
+      
+      Sample_Name == "R311861" ~ "01",
+      Sample_Name == "R311874" ~ "02",
+      Sample_Name == "R311882" ~ "03",
+      Sample_Name == "R311886" ~ "04",
+      Sample_Name == "R311895" ~ "05",
+      Sample_Name == "R315134" ~ "06",
+      Sample_Name == "R315139" ~ "07",
+      Sample_Name == "R315140" ~ "08",
+      Sample_Name == "R315141" ~ "09",
+      
+      Sample_Name == "R315145" ~ "10",
+      Sample_Name == "R315146" ~ "11",
+      Sample_Name == "R315151" ~ "12",
+      Sample_Name == "R315156" ~ "13",
+      Sample_Name == "R315158" ~ "14",
+      Sample_Name == "R315159" ~ "15",
+      Sample_Name == "R315165" ~ "16",
+      Sample_Name == "R315166" ~ "17",
+      Sample_Name == "R315172" ~ "18",
+      Sample_Name == "R315174" ~ "19",
+      
+      Sample_Name == "R315178" ~ "20",
+      Sample_Name == "R315181" ~ "21",
+      Sample_Name == "R315182" ~ "22",
+      Sample_Name == "R315184" ~ "23",
+      Sample_Name == "R315185" ~ "24",
+      Sample_Name == "R315194" ~ "25",
+      Sample_Name == "R315203" ~ "26",
+      Sample_Name == "R315212" ~ "27",
+      Sample_Name == "R315213" ~ "28",
+      Sample_Name == "R315215" ~ "29",
+      
+      Sample_Name == "R315218" ~ "30",
+      Sample_Name == "R315220" ~ "31",
+      Sample_Name == "R315222" ~ "32",
+      
+      Sample_Name == "NA11922" ~ "01",
+      Sample_Name == "NA12752" ~ "02",
+      Sample_Name == "NA12877" ~ "03",
+      Sample_Name == "NA12878" ~ "04",
+      Sample_Name == "NA12882" ~ "05",
+      Sample_Name == "NA1879"  ~ "06",
+      
+      Sample_Name == "1034" ~ "01",
+      Sample_Name == "1041" ~ "02",
+      Sample_Name == "3811" ~ "03",
+      Sample_Name == "4080" ~ "04",
+      Sample_Name == "5682" ~ "05",
+      Sample_Name == "7080" ~ "06",
+      
+      Sample_Name == "Hela"   ~ "H0",
+      Sample_Name == "Jurkat" ~ "J0",
+      Sample_Name == "K562"   ~ "K0",
+      Sample_Name == "MCF7"   ~ "M0",
+      Sample_Name == "Raji"   ~ "R0",
+      
+      Sample_Name == "0% Epigen Control"   ~ "1U",
+      Sample_Name == "50% Epigen Control"  ~ "2H",
+      Sample_Name == "100% Epigen Control" ~ "3M",
+      
+      # Sample_Name == "" ~ "",
+      TRUE ~ NA_character_
+    ),
+    Sample_Key = paste( Sample_GroupKey,Sample_NameKey,Sample_InputKey, sep="_" )
+  ) %>%
+  dplyr::arrange( Sample_GroupKey,Sample_Name,Sample_Input ) %>%
+  dplyr::add_count( Sample_Key, name = "Sample_Cnt" ) %>%
+  dplyr::group_by( Sample_Key ) %>%
+  dplyr::mutate( 
+    Sample_Rep = dplyr::row_number(),
+    Sample_Unq = paste( Sample_Key,Sample_Rep, sep="_" )
+  ) %>%
+  dplyr::ungroup()
+
+# ssh_tib %>% print(n=1000)
+# ssh_tib %>% print_sum( vec=c("Sample_Key") ) %>% print(n=1000)
+
+# ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+#           Pre-processing:: Search for Idats (MSA v.1.0) Alpha
+# ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+
+# A tibble: 192 × 13
+idat_dir <- file.path( opt$top_path, "Projects.new/MSA/data/MSA-Alpha-CHOP/AlphaData-07122023_PreDVT_SGrun" )
+ssh_tib <- ssh_tib %>% dplyr::inner_join( 
+  sesame::searchIDATprefixes( dir.name = idat_dir, recursive = TRUE ) %>% 
+    as.data.frame() %>% 
+    tibble::rownames_to_column( var = "Sentrix_Name") %>% 
+    magrittr::set_names( c("Sentrix_Name", "Sentrix_Path") ) %>%
+    tibble::as_tibble() %>%
+    dplyr::distinct( Sentrix_Name, .keep_all = TRUE ),
+  by=c("Sentrix_Name")
+)
+
+# ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+#
+#                Pre-processing:: Manifest (MSA10):: Full
+#
+# ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+
+# NOT NEEDED FOR ONLY MSA::
+# neg_ctl_rds  <- file.path( opt$top_path, "data/manifests/methylation/bgz/all_negative_ctls.rds" )
+
+msa_man_dir <- safe_mkdir( dir = file.path( opt$out_path, "manifests" ) )
+msa_man_csv <- file.path( msa_man_dir, "msa_man.csv.gz")
+v03_man_csv <- file.path( opt$top_path, "data/manifests/methylation/EX/MSAEX03/MSA-Interm-48v0-3_SS_BP123_A1.csv.gz" )
+v10_man_csv <- file.path( opt$top_path, "data/pre-idats/MSA/MSA-48v1-0-Post-PQC_2B.body.csv.gz" )
+
+# A tibble: 301,805 × 10
+msa_man_tib <- NULL
+msa_man_tib <- build_core_msa_man( neg_rds = NULL, 
+                                   m03_csv = v03_man_csv,
+                                   m10_csv = v10_man_csv,
+                                   out_csv = msa_man_csv,
+                                   vb=vb,vt=vt+3,tc=tc )
+
+# ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+#
+#                Pre-processing:: Manifest (MSA10):: Ctls
+#
+# ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+
+# A tibble: 4,077 × 4
+man_sub_ctl_tib <- NULL
+man_sub_ctl_tib <- msa_man_tib %>% 
+  dplyr::filter( stringr::str_starts( Probe_ID, pattern = "ct") ) %>%
+  dplyr::filter( Annotation == "NEGATIVE" ) %>%
+  dplyr::filter( Probe_ID %>% stringr::str_starts("ctl_Negative") ) %>%
+  dplyr::mutate( col = as.factor(col),
+                 U = dplyr::case_when( U==0 ~ NA_real_, TRUE ~ U ),
+                 M = dplyr::case_when( M==0 ~ NA_real_, TRUE ~ M ),
+                 Address = U,
+                 Sequence = "N",
+                 Type = "NEGATIVE",
+                 Color_Channel = "Red",
+                 Name = paste0( "Negative_",dplyr::row_number() )
+  ) %>% 
+  dplyr::select( Address,Type,Color_Channel,Name )
+
+# A tibble: 8,156 × 15
+msa_all_ctls_tib <- NULL
+msa_all_ctls_tib <- format_msa_ctls( 
+  neg_man_csv = file.path( opt$top_path, "data/manifests/methylation/EX/MSAEX03/MSA-Interm-48v0-3_SS_BP123_A1.csv.gz" ),
+  
+  out_dir    = file.path( opt$out_path, "manifests/inputs" ),
+  run_tag    = opt$run_name,
+  reload     = opt$reload,
+  reload_min = 10,
+  ret_data   = FALSE,
+  parallel   = opt$parallel,
+  write_out  = FALSE,
+  
+  vb=vb,vt=vt+1,tc=tc+1, tt=tt )
+
+msa_neg_ctls_tib <- NULL
+msa_neg_ctls_tib <- msa_ctls_to_negs( msa_all_ctls_tib ) %>%
+  # dplyr::bind_rows( neg_ctls_tib ) %>%
+  dplyr::arrange( Address ) %>%
+  dplyr::distinct( Address, .keep_all = TRUE )
+
+# A tibble: 178 × 3
+# msa_neg_ctls_tib %>% dplyr::anti_join( man_sub_ctl_tib, by=c("Address") )
+# A tibble: 0 × 4
+# man_sub_ctl_tib %>% dplyr::anti_join( msa_neg_ctls_tib, by=c("Address") )
+
+# Pre-compute neg-vector::
+msa_neg_ctls_vec <- NULL
+msa_neg_ctls_vec <- msa_neg_ctls_tib %>% 
+  dplyr::filter( Probe_ID %>% stringr::str_starts("ctl_Negative_") ) %>% 
+  dplyr::pull(Address) %>% as.integer() %>% unique() %>% as.vector()
+
+# ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+#
+#                    Processing:: Single Sample Test
+#
+# ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+
+vb=0
+vt=0
+tc=0
+
+outliers_val <- TRUE
+
+opt$pre_pval <- 0.05
+
+opt$min_beta <- 0.3
+opt$max_beta <- 0.7
+opt$min_perO <- 0.75
+opt$min_perI <- 0.05
+
+workflow_vec <- NULL
+workflow_vec <- c( "id" )
+workflow_vec <- c( "i" )
+
+outliers_vec <- c( TRUE,FALSE )
+
+# OLD SINGLE STATS::
+# read_idat_pair_r  8.99      0.0270  0.220      0.00900   8.71    2023-10-18 01:39:32    NA
+# A tibble: 301,803 × 22
+# tmp_pair_tib <- NULL
+
+# ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+#
+#                    Processing:: All MSA Data:: Alpha
+#
+# ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+
+opt$one_at_a_time <- TRUE
+opt$one_at_a_time <- FALSE
+
+opt$parallel <- FALSE
+opt$parallel <- TRUE
+
+#
+# Build Train/Tests Sets::
+#
+train_sentrix_tib <- NULL
+train_sentrix_tib <- ssh_tib %>% 
+  dplyr::filter( Sample_Input == 250 ) %>% 
+  dplyr::filter( Sample_Group != "FFPE" )
+
+tests_sentrix_tib <- NULL
+tests_sentrix_tib <- ssh_tib %>%
+  dplyr::anti_join( train_sentrix_tib, by=c("Sentrix_Name") )
+
+# Validation:: 192
+# dplyr::bind_rows( train_sentrix_tib, tests_sentrix_tib ) %>% dplyr::distinct( Sentrix_Name )
+
+train_sentrix_list <- NULL
+train_sentrix_list <- train_sentrix_tib %>% split( .$Sentrix_Name )
+tests_sentrix_list <- NULL
+tests_sentrix_list <- tests_sentrix_tib %>% split( .$Sentrix_Name )
+
+#
+# Run Everything...
+#
+pre_sdf_list <- NULL
+for ( outliers_val in outliers_vec ) {
+  outliers_str <- "rm-outliers"
+  if ( !outliers_val ) outliers_str <- "ok-outliers"
+  pre_sdf_path <- safe_mkdir( file.path( opt$out_path, "pre_sdf",outliers_str ) )
+  if ( p1 ) cat(glue::glue("{pmssg} pre_sdf_path = '{pre_sdf_path}'{RET}"))
+  
+  if ( opt$one_at_a_time ) {
+    if ( p1 ) cat(glue::glue("{pmssg} Running one-at-a-time...{RET2}"))
+    
+    cur_sdf_list <- NULL
+    for ( sentrix_name in ssh_tib$Sentrix_Name ) {
+      if ( p1 ) cat(glue::glue("{pmssg}{TAB} Sentrix Name({outliers_str}) = '{sentrix_name}'{RET}"))
+      
+      if ( sentrix_name != "207675480004_R09C01" ) next
+      
+      setrix_tib <- NULL
+      # setrix_tib <- ssh_tib %>% dplyr::filter( Sample_Unq == "L_H0_25_1" )
+      setrix_tib <- ssh_tib %>% dplyr::filter( Sentrix_Name == sentrix_name )
+      
+      cur_sdf_list[[sentrix_name]] <- read_idat_pair_r(
+        prefix = setrix_tib$Sentrix_Path,
+        neg_vec = msa_neg_ctls_vec,
+        man_tib = msa_man_tib,
+        ctl_tib = NULL,
+        
+        workflow_vec = c("i"),
+        
+        min_pval = opt$pre_pval,
+        min_beta = opt$min_beta,
+        max_beta = opt$max_beta,
+        min_perO = opt$min_perO,
+        min_perI = opt$min_perI,
+        rm_outliers = outliers_val,
+        
+        out_dir = pre_sdf_path,
+        run_tag = paste( setrix_tib$Sentrix_Name,outliers_str, sep="_" ),
+        
+        reload = opt$reload, reload_min = 10,
+        ret_data = 10, 
+        parallel = opt$parallel, 
+        # write_out = TRUE,
+        write_out = FALSE,
+        
+        vb=vb,vt=vt+1,tc=tc, tt=tt )
+      
+    }
+    if ( p1 ) cat(glue::glue("{pmssg} Done.{RET2}"))
+    pre_sdf_list[[outliers_str]] <- cur_sdf_list
+    
+  } else if ( opt$parallel ) {
+    if ( p1 ) cat(glue::glue("{pmssg} Running parallel...{RET2}"))
+    
+    pre_sdf_list[[outliers_str]] <- train_sentrix_list %>% # head(n=2) %>%
+      mclapply( function( x, d=pre_sdf_path ) {
+        
+        idat_tib <- NULL
+        idat_tib <- read_idat_pair_r( 
+          prefix = x$Sentrix_Path,
+          
+          neg_vec = msa_neg_ctls_vec,
+          man_tib = msa_man_tib,
+          ctl_tib = NULL,
+          # ctl_tib = msa_all_ctls_tib,
+          
+          workflow_vec = c("i"),
+          
+          min_pval = opt$pre_pval,
+          
+          min_beta = opt$min_beta,
+          max_beta = opt$max_beta,
+          min_perO = opt$min_perO,
+          min_perI = opt$min_perI,
+          rm_outliers = outliers_val,
+          
+          out_dir = d,
+          run_tag = paste( x$Sentrix_Name,outliers_str, sep="_" ),
+          
+          reload = opt$reload, reload_min = 0, # 10,
+          ret_data = 10, 
+          parallel = opt$parallel, 
+          write_out = TRUE,
+          # write_out = FALSE,
+          
+          vb=vb,vt=vt+1,tc=tc )
+        
+      })
+  } else {
+    if ( p1 ) cat(glue::glue("{pmssg} Running linear...{RET2}"))
+    
+    pre_sdf_list[[outliers_str]] <- train_sentrix_list %>% # head(n=4) %>%
+      lapply( function( x, d=pre_sdf_path ) {
+        
+        idat_tib <- NULL
+        idat_tib <- read_idat_pair_r( 
+          prefix = x$Sentrix_Path,
+          
+          neg_vec = msa_neg_ctls_vec,
+          man_tib = msa_man_tib,
+          ctl_tib = NULL,
+          # ctl_tib = msa_all_ctls_tib,
+          
+          workflow_vec = c("i"),
+          
+          min_pval = opt$pre_pval,
+          
+          min_beta = opt$min_beta,
+          max_beta = opt$max_beta,
+          min_perO = opt$min_perO,
+          min_perI = opt$min_perI,
+          rm_outliers = outliers_val,
+          
+          out_dir = d,
+          run_tag = paste( x$Sentrix_Name,outliers_str, sep="_" ),
+          
+          reload = opt$reload, reload_min = 0, # 10,
+          ret_data = 10, 
+          parallel = opt$parallel,
+          write_out = TRUE,
+          # write_out = FALSE,
+          
+          vb=vb,vt=vt+1,tc=tc, tt=tt )
+        
+      })
+  }
+  if ( p1 ) cat(glue::glue("{pmssg} Done: outliers_str='{outliers_str}'.{RET2}"))
+  
+}
+
+# ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+#
+#                    Summarize/Plot Negative Controls::
+#
+# ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+
+build_neg_plots <- TRUE
+build_neg_plots <- FALSE
+
+if ( build_neg_plots ) {
+  
+  rep_train_key_tib <- NULL
+  rep_train_key_tib <- train_sentrix_tib %>%
+    dplyr::filter( Sample_GroupKey != "T" ) %>%
+    dplyr::select( Sentrix_Name,Sample_Key,Sample_Unq )
+  
+  uhm_train_key_tib <- NULL
+  uhm_train_key_tib <- train_sentrix_tib %>%
+    dplyr::filter( Sample_GroupKey == "T" ) %>%
+    dplyr::select( Sentrix_Name,Sample_Key,Sample_Unq )
+  
+  Sample_Plot_Cnt <- 53
+  
+  # Negative Controls: Replicates
+  rep_train_exp_tib <- NULL
+  rep_train_exp_tib <- dplyr::bind_rows(
+    pre_sdf_list[[1]][rep_train_key_tib$Sentrix_Name] %>% 
+      head(n=Sample_Plot_Cnt) %>%
+      lapply( function(x) { x %>% dplyr::filter( Probe_ID %>% stringr::str_starts("ctl_Negative_") ) %>% dplyr::select( UG,UR, mask_0,mask_1 ) } ) %>%
+      dplyr::bind_rows( .id = "Sentrix_Name" ) %>%
+      dplyr::mutate( Outliers = "rm" ),
+    pre_sdf_list[[2]][rep_train_key_tib$Sentrix_Name] %>% 
+      head(n=Sample_Plot_Cnt) %>%
+      lapply( function(x) { x %>% dplyr::filter( Probe_ID %>% stringr::str_starts("ctl_Negative_") ) %>% dplyr::select( UG,UR, mask_0,mask_1 ) } ) %>%
+      dplyr::bind_rows( .id = "Sentrix_Name" ) %>%
+      dplyr::mutate( Outliers = "ok" ),
+    NULL
+  ) %>% dplyr::inner_join( rep_train_key_tib, by=c("Sentrix_Name") ) %>%
+    dplyr::select( -Sentrix_Name ) %>%
+    tidyr::pivot_longer( cols = c(mask_0,mask_1), 
+                         names_to = "Mask_Grp", names_prefix = "mask_", 
+                         values_to = "Mask_Val" )
+  
+  # Negative Summary:: Replicates
+  # [TBD]: Update summary code below to simplier...
+  rep_train_exp_sum1 <- NULL
+  rep_train_exp_sum1 <- rep_train_exp_tib %>%
+    # dplyr::group_by( Outliers,Mask_Grp,Mask_Val ) %>% 
+    dplyr::group_by( Sample_Key,Outliers,Mask_Grp,Mask_Val ) %>% 
+    dplyr::summarise( Cnt=n(), 
+                      UG_Avg=mean(UG,na.rm=TRUE),
+                      UR_Avg=mean(UR,na.rm=TRUE), 
+                      .groups = "drop" )
+  
+  #
+  # [NOTE]: Goal = High True total count and lowd True UG/UR Average Siginal
+  #
+  rep_train_exp_sum2 <- NULL
+  rep_train_exp_sum2 <- rep_train_exp_sum1 %>% 
+    tidyr::pivot_wider( names_from = c(Mask_Val), 
+                        values_from = c(Cnt, UG_Avg, UR_Avg) ) %>%
+    dplyr::mutate( Tot_Cnt = Cnt_FALSE+Cnt_TRUE,
+                   True_Sig_Sum = UG_Avg_TRUE + UR_Avg_TRUE,
+                   Full_Sig_Sum = UG_Avg_TRUE + UR_Avg_TRUE + UG_Avg_FALSE + UR_Avg_FALSE,
+                   True_Cnt_Per = round( 100*Cnt_TRUE/Tot_Cnt, 1),
+                   True_Sig_Per = round( 100*True_Sig_Sum/Full_Sig_Sum, 1 )
+    )
+  
+  rep_train_exp_tab <- NULL
+  rep_train_exp_tab <- rep_train_exp_tib %>%
+    tidyr::pivot_longer( cols = c( UG,UR), 
+                         names_to = "Col", 
+                         values_to = "Sig" ) # %>% tidyr::unite( Col_Masked, Col,Mask_Val, remove = TRUE, sep = "_" )
+  
+  # Rows = vars(Outliers,Mask_Grp)
+  # Cols = vars(Sample_Key)
+  # Colors = paste(Col,Mask_Val)
+  
+  #
+  # [TBD]: Color/Fill = Sig, Cols += Mask_Val?
+  #
+  rep_train_exp_ggg1 <- NULL
+  rep_train_exp_ggg1 <- rep_train_exp_tab %>% 
+    # dplyr::filter( Sig < 1500 ) %>%
+    dplyr::filter( Sig < 3500 ) %>%
+    
+    # Line not need below, done above...
+    # dplyr::filter( Sample_Key %>% stringr::str_starts("C_") ) %>%
+    # ggplot2::ggplot( aes( x=Sig, Color=Col_Masked, group=Col_Masked ) ) +
+    # ggplot2::ggplot( aes( x=Sig, Color=Col, group=Col ) ) +
+    ggplot2::ggplot( aes( x=Sig, Color=Col, group=Sample_Unq, fill=Col ) ) +
+    ggplot2::geom_density( alpha=0.2 ) +
+    ggplot2::facet_grid( 
+      # rows=vars(Outliers,Mask_Grp),
+      rows=vars(Outliers,Mask_Grp,Mask_Val),
+      cols=vars(Sample_Key), 
+      scales = "fixed" )
+  
+  rep_train_exp_ggg1
+  
+  # [Done]: Plot: rep_train_exp_ggg2, where TRUE/FALSE get simplified into the 
+  # same plot by removing other variables to make it simple...
+  # [Conclusion]: "Visual" Use rm.0
+  
+  rep_train_exp_ggg2 <- NULL
+  rep_train_exp_ggg2 <- rep_train_exp_tab %>% 
+    dplyr::filter( Sig < 1500 ) %>%
+    # dplyr::filter( Sig < 3500 ) %>%
+    
+    # Line not need below, done above...
+    # dplyr::filter( Sample_Key %>% stringr::str_starts("C_") ) %>%
+    # ggplot2::ggplot( aes( x=Sig, Color=Col_Masked, group=Col_Masked ) ) +
+    # ggplot2::ggplot( aes( x=Sig, Color=Col, group=Col ) ) +
+    ggplot2::ggplot( aes( x=Sig, Color=Mask_Val, group=Mask_Val, fill=Mask_Val ) ) +
+    ggplot2::geom_density( alpha=0.2 ) +
+    ggplot2::facet_grid( 
+      # rows=vars(Outliers,Mask_Grp),
+      rows=vars(Outliers,Mask_Grp),
+      cols=vars(Sample_Key), 
+      scales = "fixed" )
+  
+  rep_train_exp_ggg2
+}
+
+# ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+#
+#                           Replicate/Titration 
+#                     Sample Sheet Split:: Training
+#
+# ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+
+rep_train_ssh_tib <- NULL
+rep_train_ssh_tib <- train_sentrix_tib %>%
+  dplyr::filter( Sample_GroupKey != "T" )
+
+rep_train_ssh_tibs <- NULL
+rep_train_ssh_tibs <- rep_train_ssh_tib %>% split( .$Sample_Key )
+
+uhm_train_ssh_tib0 <- NULL
+uhm_train_ssh_tib0 <- train_sentrix_tib %>%
+  dplyr::filter( Sample_GroupKey == "T" )
+
+uhm_train_ssh_tib <- NULL
+uhm_train_ssh_tib <- dplyr::bind_rows(
+  uhm_train_ssh_tib0 %>% 
+    dplyr::filter( Sample_Titration == 0  | Sample_Titration == 50 ) %>% 
+    dplyr::mutate( Sample_Key  = paste0( Sample_GroupKey,"_UH_",Sample_InputKey), 
+                   Sample_Unq2 = paste( Sample_Key,Sample_Rep, sep="_") ) %>%
+    dplyr::select( -Sample_Unq2 ),
+  uhm_train_ssh_tib0 %>% 
+    dplyr::filter( Sample_Titration == 0  | Sample_Titration == 100 ) %>% 
+    dplyr::mutate( Sample_Key  = paste0( Sample_GroupKey,"_UM_",Sample_InputKey), 
+                   Sample_Unq2 = paste( Sample_Key,Sample_Rep, sep="_") ) %>%
+    dplyr::select( -Sample_Unq2 ),
+  uhm_train_ssh_tib0 %>% 
+    dplyr::filter( Sample_Titration == 50 | Sample_Titration == 100 ) %>% 
+    dplyr::mutate( Sample_Key  = paste0( Sample_GroupKey,"_HM_",Sample_InputKey), 
+                   Sample_Unq2 = paste( Sample_Key,Sample_Rep, sep="_") ) %>%
+    dplyr::select( -Sample_Unq2 )
+)
+
+uhm_train_ssh_tibs <- NULL
+uhm_train_ssh_tibs <- uhm_train_ssh_tib %>% split( .$Sample_Key )
+
+#
+# Rejoin ( rep_train_ssh_tib + uhm_train_ssh_tib*2 )
+#
+train_ssh_tib <- NULL
+train_ssh_tib <- dplyr::bind_rows( rep_train_ssh_tib, uhm_train_ssh_tib )
+
+train_ssh_tibs <- NULL
+train_ssh_tibs <- train_ssh_tib %>% split( .$Sample_Key )
+
+# ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+#
+#                    Pprocessing:: Sesame Sweep Parameters
+#
+# ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+
+# Break Params::
+opt$single_exp <- TRUE
+opt$single_exp <- FALSE
+
+opt$single_work <- FALSE
+opt$single_work <- TRUE
+
+opt$single_mask <- FALSE
+opt$single_mask <- TRUE
+
+opt$single_pval <- FALSE
+opt$single_pval <- TRUE
+
+opt$signle_outlier <- FALSE
+opt$signle_outlier <- TRUE
+
+# Run Sweep Params::
+opt$outliers_vec <- c( TRUE,FALSE )
+opt$min_pval_vec <- c( 1.0, 0.1, 0.5 )
+opt$mask_vec <- c(0,1)
+
+opt$min_dB <- 0.2
+
+#
+# Old School::
+# opt$work_step_vec <- c( "DCPB",
+#                         "DPB", 
+#                         "DCNB", 
+#                         "DNB"  )
+
+# New Partitioned::
+# 1. [DC|CD|NDC|NCD]
+# 2. [Oon]
+# 3. [P|N][Bb]
+opt$work_step_mat <- matrix( c("DC","P","B",
+                               "CD","P","B"), ncol = 2 )
+
+ses_sdf_list <- NULL
+for ( outliers_val in opt$outliers_vec ) {
+  outliers_str <- "rm-outliers"
+  if ( !outliers_val ) outliers_str <- "ok-outliers"
+  pre_sdf_path <- safe_mkdir( file.path( opt$out_path, "pre_sdf",outliers_str ) )
+  if ( p1 ) cat(glue::glue("{pmssg} pre_sdf_path = '{pre_sdf_path}'{RET}"))
+  
+  for ( min_pval in opt$min_pval_vec ) {
+    min_pval_str <- paste0("pval-",min_pval)
+    
+    for ( mask_val in opt$mask_vec ) {
+      #
+      # [TBD]: Fix the mask_val == ![0,1] NO_MASKING! 
+      #
+      mask_str <- "mask_0"
+      if ( mask_val == 0 ) mask_str <- "mask_0"
+      if ( mask_val == 1 ) mask_str <- "mask_1"
+      if ( p1 ) cat(glue::glue("{pmssg}{TAB} mask_str = '{mask_str}'{RET}"))
+      
+      for ( widx in c(1:base::ncol(opt$work_step_mat)) ) {
+        
+        # Make Work String::
+        work_full_str <- NULL
+        work_full_str <- opt$work_step_mat[,widx] %>% paste( collapse = "-")
+        
+        # Need proper SDF output directory:
+        cur_out_path <- NULL
+        cur_out_path <- safe_mkdir( 
+          dir = file.path(opt$out_path,"sdf", outliers_str,min_pval_str,mask_str,work_full_str ) )
+        
+        #
+        # Loop over experiments:: Replicates
+        #
+        for ( exp_key in names(rep_train_ssh_tibs) ) {
+          if ( p1 ) cat(glue::glue("{pmssg}{TAB2} exp_key = '{exp_key}'{RET}"))
+          
+          cur_ssh_tibs <- NULL
+          cur_ssh_tibs <- rep_train_ssh_tibs[[exp_key]] %>% split(.$Sentrix_Name)
+          
+          #
+          # [TBD]: Load Auto Sample Sheets and Filter Poor Samples...
+          #
+          
+          #
+          # Loop of Samples (Sentrix_Names)::
+          #
+          
+          beta_tibs <- NULL
+          pval_tibs <- NULL
+          for ( sentrix_name in names(cur_ssh_tibs) ) {
+            
+            beta_tib <- NULL
+            pval_tib <- NULL
+            pval_mat <- NULL
+            
+            pre_sdf_tib <- NULL
+            pre_sdf_tib <- pre_sdf_list[[outliers_val]][[sentrix_name]]        
+            
+            # Pre-SDF to Ses-SDF Conversion: 
+            #   1. Sesame SDF
+            #   2. Sesame Controls (Negative)
+            #   3. Apply Current Mask...
+            #
+            # [TBD]: Implement mask_val = !{0,1}, i.e. NO_MASK
+            #
+            ses_all_sdf <- NULL
+            ses_all_sdf <- format_rcpp_sdf( sdf_tib = pre_sdf_tib, 
+                                            stat_idx = mask_val, 
+                                            cgn_pval = opt$pre_pval, 
+                                            add_cgns = TRUE, 
+                                            add_negs = TRUE,
+                                            add_ctls = FALSE ) %>%
+              dplyr::select( Probe_ID:mask ) %>% 
+              as.data.frame() %>%
+              sesame::SigDF( platform = "" )
+            
+            debug <- FALSE
+            if ( debug ) {
+              # Debug Sesame SDF Tibble::
+              ses_all_tib <- NULL
+              ses_all_tib <- ses_sdf %>% as.data.frame() %>% tibble::as_tibble()
+              
+              # Extract Sesame Controls::
+              ses_ctl_tib <- NULL
+              ses_ctl_tib <- ses_sdf %>% sesame::controls() %>% tibble::as_tibble()
+            }
+            
+            #
+            # Move three steps: {pre, mid, pos} modifications
+            #
+            for (sidx in c(1:length(opt$work_step_mat[,widx])) ) {
+              
+              work_step <- NULL
+              work_step <- opt$work_step_mat[sidx,widx]
+              if ( work_step == "" ) next
+              # work_step_str <- paste0("work-",work_step)
+              
+              ses_all_sdf <- ses_all_sdf %>%
+                mutate_sdf_simple( 
+                  steps = work_step, 
+                  negs_min = min_pval, 
+                  poob_min = min_pval, 
+                  vb=vb,vt=vt+2,tc=tc, tt = tt )
+              
+              # ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+              #                   Data-processing:: Extract pooBAH P-Values
+              # ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+              
+              pval_tib <- mutate_sdf_simple( 
+                sdf = ses_all_sdf,
+                # steps = "n", # Without masking...
+                # For 'O' or 'o' or 'n' negs_min and poob_min don't matter because you're returning the full values...
+                steps = "O", 
+                negs_min = 1.0, # negs_min = 0.05,
+                poob_min = 1.0, # poob_min = 0.05,
+                probe_id = "Probe_ID", 
+                beta_key = paste("Pval",cur_ssh_tibs[[sentrix_name]]$Sample_Rep, sep="_"),
+                ret_tib = TRUE,
+                vb=vb, vt=vt+2, tc=tc )
+            } # End of 'sidx' (End of file three-step worksteps...)
+            
+            # ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+            #                   Data-processing:: Extract Beta Values
+            # ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+            
+            # [TBD]: Screen Poor performing samples via pval_mat
+            if ( !is.null(pval_tib) ) pval_mat <- 
+              as.matrix( pval_tib %>% tibble::column_to_rownames( var = "Probe_ID" ) )
+            
+            beta_tib <- NULL
+            beta_tib <- mutate_sdf_simple( 
+              sdf = ses_all_sdf,
+              # steps = "V", # With masking...
+              steps = "v", # Without masking...
+              negs_min = 1.0, # negs_min = 0.05,
+              poob_min = 1.0, # poob_min = 0.05,
+              probe_id = "Probe_ID", 
+              beta_key = paste("Beta",cur_ssh_tibs[[sentrix_name]]$Sample_Rep, sep="_"),
+              ret_tib = TRUE,
+              vb=vb, vt=vt+2, tc=tc )
+            
+            #
+            # [TBD]: Merge with beta_tab
+            # [TBD]: Merge with pval_tab
+            #
+            if ( is.null( beta_tibs ) ) { 
+              beta_tibs <- beta_tib
+            } else {
+              beta_tibs <- beta_tibs %>% inner_join( beta_tib, by = c("Probe_ID") )
+            }
+            
+            if ( is.null( pval_tibs ) ) {
+              pval_tibs <- pval_tib
+            } else {
+              pval_tibs <- pval_tibs %>% inner_join( pval_tib, by = c("Probe_ID") )
+            }
+            
+          } # End of 'sentrix_name' (End of Current Sample)
+          
+          
+          #
+          # [TBD]: CalcDb() i.e. Analyze Experiement...
+          #
+          cur_min_pval <- min_pval
+          cur_min_dB   <- opt$min_dB
+          cur_cmp_str  <- "lte"
+          cur_is_abs   <- TRUE
+          cur_dBe_max  <- 1.0
+          cur_dPe_max  <- 1.0
+          cur_dBe_fac  <- 1.0
+          cur_dPe_fac  <- 1.0
+          
+          exp_name1  <- exp_key
+          beta_tibs2 <- NULL
+          pval_tibs2 <- NULL
+          exp_name2  <- NULL
+          
+          #
+          # [TBD]: Provide correct out directory and write data with option for subset...
+          #
+          cur_dB_tib <- NULL
+          cur_dB_tib <- calc_dBs( beta_tibA = beta_tibs,
+                                  pval_tibA = pval_tibs,
+                                  name_strA = exp_name1, # names(all_beta_tibs[[1]])[1]
+                                  
+                                  beta_tibB = beta_tibs2,
+                                  pval_tibB = pval_tibs2,
+                                  name_strB = exp_name2, # names(all_beta_tibs[[2]])[1]
+                                  
+                                  min_pval = cur_min_pval,
+                                  min_dB   = cur_min_dB, 
+                                  cmp_str  = cur_cmp_str,
+                                  is_abs   = cur_is_abs,
+                                  dBe_max  = cur_dBe_max,
+                                  dPe_max  = cur_dPe_max,
+                                  dBe_fac  = cur_dBe_fac,
+                                  dPe_fac  = cur_dPe_fac,
+                                  
+                                  out_dir    = file.path( cur_out_path,exp_key ),
+                                  run_tag    = exp_key,
+                                  reload     = opt$reload,
+                                  reload_min = 10, 
+                                  # ret_data   = TRUE,
+                                  ret_data   = FALSE,
+                                  parallel   = opt$parallel, 
+                                  write_out = TRUE, 
+                                  write_sum = TRUE,
+
+                                  vb=vb+2,vt=vt+1,tc=tc+1, tt=tt )
+          
+          #
+          # [TBD]: Single Experiment Screening...
+          #
+          
+          if ( p1 ) cat(glue::glue("{pmssg}{TAB2} Done.{RET}"))
+          if ( opt$single_exp ) break
+        } # End of 'exp_key' (End of Experiment Processing, Now Evaluate)
+
+        if ( opt$single_work ) break
+      } # End of 'widx' (End of Current Full Workflow)
+      if ( opt$single_mask ) break
+    } # End of 'mask_val' (End of upfront mask method, needs to add NO_MASK)
+    
+    
+    #
+    # [TBD]: Integrate Above!!! Loop over experiments:: Titration [Incorporate Above...]
+    #
+    
+    
+    if ( opt$single_pval ) break
+  } # End of 'min_pval' ([TBD]: Apply p-value threshold above...)
+  if ( p1 ) cat(glue::glue("{pmssg} Done.{RET2}"))
+  
+  if ( opt$signle_outlier ) break
+} # End of 'outlier_val' (remove or keep {rm,ok})
+
+# Cmd Check:
+# ls -ltr scratch/stable_imSesameCpp_MSAv1_Alpha/MSAv10-NCBI-v0/sdf/*/*/*/*/*/*/*dBs.csv.gz | wc -l
+
+#
+# [TBD]: Critical:
+#   - Update Experiment Sheet for Titration Experiments
+#   - Update Code for Titration[[exp_key]]...
+#   - Write out Negative Controls per experiment and summarize
+#   - Run formatVCF()
+#
+#   - Add on-the-fly experiment analysis or re-load everything
+#   - 
+#
+
+#
+# Good plots below to better understand everything...
+#
+if ( FALSE ) {
+  
+  # Build CGN Versions::
+  #
+  cur_dB_min_cgn_tib <- NULL
+  cur_dB_min_cgn_tib <- cur_dB_tib %>%
+    dplyr::filter( Probe_Type == "cg" )
+
+  # Get Correlations::
+  #
+  cur_dB_min_all_cor <- NULL
+  cur_dB_min_all_cor <- cor( x = cur_dB_tib$wS_per, 
+                             y = cur_dB_tib$dB_med, 
+                             use = "pairwise.complete.obs", method = "pearson" )
+  print(cur_dB_min_all_cor)
+  
+  cur_dB_min_cgn_cor <- NULL
+  cur_dB_min_cgn_cor <- cor( x = cur_dB_min_cgn_tib$wS_per, 
+                             y = cur_dB_min_cgn_tib$dB_med, 
+                             use = "pairwise.complete.obs", method = "pearson" )
+  print(cur_dB_min_cgn_cor)
+  
+  # BOX Plots::
+  #
+  box_dB_min_all_ggg <- NULL
+  box_dB_min_all_ggg <- cur_dB_min_all_tib %>% 
+    ggplot2::ggplot( aes(x=db_pas_per,y=wS_per, group = db_pas_per) ) + 
+    ggplot2::geom_boxplot( varwidth = TRUE )
+  box_dB_min_all_ggg
+  
+  box_dB_min_cgn_ggg <- NULL
+  box_dB_min_cgn_ggg <- cur_dB_min_cgn_tib %>% 
+    ggplot2::ggplot( aes(x=db_pas_per,y=wS_per, group = db_pas_per) ) + 
+    ggplot2::geom_boxplot( varwidth = TRUE )
+  box_dB_min_cgn_ggg
+  
+  # D2D Plots::
+  #
+  d2d_dB_min_all_ggg <- NULL
+  d2d_dB_min_all_ggg <- cur_dB_min_all_tib %>% 
+    ggplot2::ggplot( aes( x=dB_med, y=wS_per ) ) +
+    ggplot2::geom_density2d()
+  d2d_dB_min_all_ggg
+  
+  d2d_dB_min_cgn_ggg <- NULL
+  d2d_dB_min_cgn_ggg <- cur_dB_min_cgn_tib %>% 
+    ggplot2::ggplot( aes( x=dB_med, y=wS_per ) ) +
+    ggplot2::geom_density2d()
+  d2d_dB_min_cgn_ggg
+  
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# msa_all_ctls_tib  %>% dplyr::filter( Probe_Type == "NEGATIVE" ) %>% dplyr::filter( !Name %>% stringr::str_starts( "ctl_Negative") ) 
+
+#
+# All Controls (EPIC + MSA):: Rccp Format
+#
+# A tibble: 5,135 × 3
+msa_neg_ctls_tib <- NULL
+msa_neg_ctls_tib <- msa_ctls_to_negs( msa_all_ctls_tib ) %>%
+  # dplyr::bind_rows( neg_ctls_tib ) %>%
+  dplyr::arrange( Address ) %>%
+  dplyr::distinct( Address, .keep_all = TRUE )
+
+#
+# MSA Select Controls:: Not sure what this is for...
+#
+# A tibble: 3,151 × 4
+msa_sel_ctls_tib <- NULL
+msa_sel_ctls_csv <- file.path( opt$top_path, "data/pre-idats/MSA/MSA-48v1-0-Post-PQC_2B.ctls-wHeader.clean.csv.gz" )
+if ( !file.exists(msa_sel_ctls_csv) ) {
+  msa_sel_ctls_csv <- file.path( opt$top_path, "data/pre-idats/MSA/MSA-48v1-0-Post-PQC_2B.ctls-wHeader.csv.gz" )
+  msa_sel_ctls_tib <- readr::read_csv( file = msa_sel_ctls_csv, show_col_types = FALSE ) %>%
+    clean_tib()
+  
+  msa_sel_ctls_csv <- file.path( opt$top_path, "data/pre-idats/MSA/MSA-48v1-0-Post-PQC_2B.ctls-wHeader.clean.csv.gz" )
+  readr::write_csv( x = msa_sel_ctls_tib, file = msa_sel_ctls_csv )
+  
+} else {
+  msa_sel_ctls_tib <- readr::read_csv( file = msa_sel_ctls_csv, show_col_types = FALSE ) %>%
+    clean_tib()
+}
+
+#
+# Controls Only (Sesame/Rccp Format)::
+#
+# A tibble: 3,057 × 11
+msa_ses_ctls_tib <- NULL
+msa_ses_ctls_tib <- msa_all_ctls_tib %>% 
+  dplyr::filter( U %in% msa_sel_ctls_tib$Address ) %>% 
+  dplyr::select( Probe_ID,U,M,col,Name, Species,Manifest,Manifest_Version,
+                 Annotation,Chromosome,Probe_Type ) %>%
+  dplyr::mutate( Probe_Type = "ct" )
+
+# ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+#                    Pre-processing:: Run-Time Variables
+# ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+
+tc <- 0
+vt <- 0
+
+# vb <- 5 # Two level deep (p3)
+# vb <- 4 # One level deep (p2)
+# vb <- 3 # Standard
+# vb <- 2 # Light
+# vb <- 1 # Min
+vb <- 0 # None
+
+success <- FALSE
+
+opt$pre_pval <- 0.05
+
+opt$min_beta <- 0.3
+opt$max_beta <- 0.7
+opt$min_perO <- 0.75
+opt$min_perI <- 0.05
+
+workflow_vec <- NULL
+workflow_vec <- c( "id" )
+workflow_vec <- c( "i" )
+
+opt$return_df <- 0
+opt$return_df <- 1
+opt$return_df <- 2
+opt$return_df <- 3
+opt$return_df <- 4
+opt$return_df <- 5
+
+#
+# TBD:: Scatter plots with random sub-selection::
+#
+opt$max_sam_rep <- 6
+
+opt$min_dB <- 0.2
+opt$Pass_Pval_Min <- 70
+
+# [TBD]: Remove the extra copying done below...
+#
+# exp_idat_lst <- NULL
+# exp_idat_lst <- msa10_idat_list
+# exp_man_tib  <- msa_man_tib
+#
+# exp_ctl_tib  <- msa_ses_ctls_tib
+# exp_out_dir  <- safe_mkdir( file.path(opt$out_path, "sdf/core") )
+
+# ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+#
+#                    Pre-processing:: All MSA Data::
+#
+# ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+
+opt$screen_pre_sdf_only <- TRUE
+opt$screen_pre_sdf_only <- FALSE
+
+if ( opt$screen_pre_sdf_only ) {
+  # Length = 192
+  sentrix_list <- NULL
+  sentrix_list <- dplyr::bind_rows(
+    ssh_tib %>%
+      dplyr::filter( Source_Key=="T1" ) %>%
+      # dplyr::filter( Sample_Base == "HELA" ) %>% 
+      # dplyr::filter( Sample_Input >= 250 ) %>% 
+      
+      dplyr::filter( User_Format == "48x1" ) %>%
+      # dplyr::filter( User_Format != "48x1" ) %>%
+      dplyr::filter( !is.null(Sentrix_Name) ),
+    
+    NULL
+  ) %>% split( .$Sentrix_Name )
+  
+  # sentrix_list %>% dplyr::bind_rows() %>% print_sum( vec = c("Sample_Base","Sample_Input","Sample_Titration") ) %>% print(n=1000)
+  
+} else {
+  # Length = 447
+  sentrix_list <- NULL
+  sentrix_list <- dplyr::bind_rows(
+    # E1 Group::
+    ssh_tib %>%
+      dplyr::filter( Source_Key=="E1" ), # %>% dplyr::filter( Sample_Base == "HELA" ) %>% head(n=4),
+    
+    # R0 Group::
+    ssh_tib %>% dplyr::filter( Source_Key=="R0" ),
+    
+    # T0 Group::
+    ssh_tib %>% dplyr::filter( Source_Key=="T0" ),
+    
+    # T1 Group::
+    ssh_tib %>%
+      dplyr::filter( Source_Key=="T1" ) %>%
+      # dplyr::filter( Sample_Base == "HELA" ) %>% 
+      # dplyr::filter( Sample_Input >= 250 ) %>% 
+      dplyr::filter( User_Format == "48x1" ), # %>% head(n=4),
+    
+    NULL
+  ) %>% split( .$Sentrix_Name )
+}
+
+# ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+#
+#                    Processing:: Prefix To SDF Rcpp
+#
+# ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+
+# LEFT OFF HERE!!!
+#
+# [TBD]: implement prefix_to_sdf_rcpp()
+#
+
+outliers_vec <- c( TRUE, FALSE )
+
+# pre_pval, cgn_pval, ctl_pval, neg_pval, work_steps, 
+# outliers_vec => always try {TRUE,FALSE}
+# stats_steps => always try {0,1}
+# negs_only => always TRUE (for now)
+#
+# [TBD]: Make this a params_sheet
+param_mat <- NULL
+param_mat <- cbind( c(0.05, 1.00, 0.05, 0.05, "DcPB"),
+                    c(0.05, 0.05, 0.05, 0.05, "DcPB") 
+)
+# param_mat[,1]
+# param_mat[,2]
+# param_mat %>% base::ncol() = 2
+# param_mat %>% base::nrow() = 5
+
+sent_vec <- NULL
+sent_vec <- c("207675480004_R09C01",
+              "207675480004_R11C01", 
+              "207675480004_R13C01",
+              "207675480004_R15C01",
+              "207675480016_R09C02",
+              "207675480016_R11C02",
+              "207675480016_R13C02",
+              "207675480016_R15C02",
+              "207675480016_R16C02")
+
+# sent_vec <- c("207675480004_R09C01")
+
+# sentrix_sel_list <- NULL
+# sentrix_sel_list <- sentrix_list[sent_vec]
+# sentrix_sel_list <- sentrix_list
+
+# ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+#
+#                    Pre-processing:: All MSA Data::
+#
+# Technically This needs to be done once!
+#  Should Just Copy: scratch/stable_imSesameCpp_MSAv1/MSAv10-NCBI-v18/pre_sdf/ok-outliers/read_idat_pair_r
+#
+# ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+
+opt$parallel <- TRUE
+opt$parallel <- FALSE
+
+opt$one_at_a_time <- FALSE
+opt$one_at_a_time <- TRUE
+
+sentrix_name_vec <- NULL
+sentrix_name_vec <- sentrix_list %>% names()
+
+pre_sdf_list <- NULL
+for ( outliers_val in outliers_vec ) {
+  outliers_str <- "rm-outliers"
+  if ( !outliers_val ) outliers_str <- "ok-outliers"
+  pre_sdf_path <- safe_mkdir( file.path( opt$out_path, "pre_sdf",outliers_str ) )
+  if ( p1 ) cat(glue::glue("{pmssg} pre_sdf_path = '{pre_sdf_path}'{RET}"))
+  
+  pre_sdf_list[[outliers_str]] <- NULL
+  if ( opt$one_at_a_time ) {
+    if ( p1 ) cat(glue::glue("{pmssg}{TAB} Running one-at-a-time...{RET2}"))
+    
+    for ( sentrix_name in sentrix_name_vec ) {
+      if ( p1 ) cat(glue::glue("{pmssg}{TAB} Sentrix Name({outliers_str}) = '{sentrix_name}'{RET}"))
+      
+      # man_tib = dplyr::bind_rows( msa_man_tib,all_man_tib ),
+      # ctl_tib = msa_all_ctls_tib,
+      pre_sdf_list[[sentrix_name]] <- read_idat_pair_r(
+        # prefix = sentrix_list[[sentrix_name]]$Sentrix_Path,
+        # prefix = "/Users/bbarnes/Documents/data/idats/idats_EPIC_v2-20220912-Alpha_subset/206203800149/206203800149_R01C01",
+        # prefix = "/Users/bbarnes/Documents/data/idats/idats_MSA_v03-48x1-05082023_MSAV03_Alpha/207545400011/207545400011_R14C01",
+        prefix = "/Users/bbarnes/Documents/data/pre-idats/MSA/SNG.07122023_PreDVT_SGrun/07122023_PreDVT_SGrun/207675480004/207675480004_R09C01",
+        
+        # 207675480004_R09C01
+        
+        # neg_vec = msa_neg_ctls_tib$Address %>% as.vector(),
+        neg_vec = msa_neg_ctls_tib %>% 
+          dplyr::filter( Probe_ID %>% stringr::str_starts("ctl_Negative_") ) %>% 
+          dplyr::pull(Address) %>% as.integer() %>% unique() %>% as.vector(),
+        man_tib = msa_man_tib,
+        ctl_tib = NULL,
+        
+        workflow_vec = c("i"),
+        
+        min_pval = opt$pre_pval,
+        min_beta = opt$min_beta,
+        max_beta = opt$max_beta,
+        min_perO = opt$min_perO,
+        min_perI = opt$min_perI,
+        rm_outliers = outliers_val,
+        
+        out_dir = pre_sdf_path,
+        run_tag = paste( sentrix_name,outliers_str, sep="_" ),
+        # run_tag = paste( sentrix_list[[sentrix_name]]$Sentrix_Name,outliers_str, sep="_" ),
+        
+        reload = opt$reload, reload_min = 10,
+        ret_data = 10, 
+        parallel = opt$parallel, 
+        # write_out = TRUE,
+        write_out = FALSE,
+        
+        vb=vb,vt=vt+1,tc=tc )
+    }
+    
+    
+  } else if ( opt$parallel ) {
+    pre_sdf_list[[outliers_str]] <- sentrix_list %>% # head(n=2) %>%
+      mclapply( function( x, d=pre_sdf_path ) {
+        
+        idat_tib <- NULL
+        idat_tib <- read_idat_pair_r( 
+          prefix = x$Sentrix_Path,
+          
+          neg_vec = msa_neg_ctls_tib$Address %>% as.vector(),
+          # man_tib = dplyr::bind_rows( msa_man_tib,all_man_tib ),
+          man_tib = msa_man_tib,
+          ctl_tib = msa_all_ctls_tib,
+          
+          workflow_vec = c("i"),
+          
+          min_pval = opt$pre_pval,
+          
+          min_beta = opt$min_beta,
+          max_beta = opt$max_beta,
+          min_perO = opt$min_perO,
+          min_perI = opt$min_perI,
+          rm_outliers = outliers_val,
+          
+          out_dir = d,
+          run_tag = paste( x$Sentrix_Name,outliers_str, sep="_" ),
+          
+          reload = opt$reload, reload_min = 10,
+          ret_data = 10, 
+          parallel = opt$parallel, write_out = TRUE,
+          
+          vb=vb,vt=vt+1,tc=tc )
+        
+      })
+  } else {
+    pre_sdf_list[[outliers_str]] <- sentrix_list %>% # sentrix_list[sent_vec] %>% # head(n=2) %>%
+      lapply( function( x, d=pre_sdf_path ) {
+        
+        idat_tib <- NULL
+        idat_tib <- read_idat_pair_r( 
+          prefix = x$Sentrix_Path,
+          
+          neg_vec = msa_neg_ctls_tib$Address %>% as.vector(),
+          # man_tib = dplyr::bind_rows( msa_man_tib,all_man_tib ),
+          man_tib = msa_man_tib,
+          ctl_tib = msa_all_ctls_tib,
+          
+          workflow_vec = c("i"),
+          # sesame_work_str = "DB",
+          
+          # min_pval = min_pval, 
+          min_pval = opt$pre_pval,
+          
+          min_beta = opt$min_beta,
+          max_beta = opt$max_beta,
+          min_perO = opt$min_perO,
+          min_perI = opt$min_perI,
+          rm_outliers = outliers_val,
+          
+          out_dir = d,
+          run_tag = paste( x$Sentrix_Name,outliers_str, sep="_" ),
+          
+          reload = opt$reload, reload_min = 10,
+          ret_data = 10, 
+          parallel = opt$parallel, write_out = TRUE,
+          
+          vb=vb,vt=vt+1,tc=tc, tt=tt )
+        
+      })
+  }
+}
+
+
+
+# Prefix not path...
+sentrix_list %>% lapply( function( x ) { file.exists( paste0(x$Sentrix_Path,"_Red.idat.gz") ) } ) %>% unique() 
+sentrix_list %>% lapply( function( x ) { file.exists( paste0(x$Sentrix_Path,"_Grn.idat.gz") ) } ) %>% unique()
+
+
+
+
+
+
+#
+# Waiting here...
+#
+
+# Quick Summary for negative control calling...
+# pre_sdf_list[[1]][[1]] %>% format_rcpp_sdf( ctl_pval = 0.05, neg_pval = 0.0, stat_idx = 1, negs_only = TRUE ) %>% dplyr::summarise( Cnt=n(), Grn_Avg = mean(UG, na.rm=TRUE),Red_Avg = mean(UR, na.rm=TRUE) )
+
+pre_cpp_tib <- NULL
+pre_cpp_tib <- pre_sdf_list[[1]][[1]] %>% 
+  format_rcpp_sdf( stat_idx = 1, 
+                   cgn_pval = 0.05, 
+                   neg_pval = 0.05, 
+                   ctl_pval = 0.05, 
+                   add_cgns = TRUE,
+                   add_negs = FALSE,
+                   add_ctls = FALSE )
+
+pre_cpp_tib %>% 
+  dplyr::summarise( Cnt=n(), 
+                    Mask_Cnt = sum( mask ),
+                    Grn_Avg = mean(UG, na.rm=TRUE),
+                    Red_Avg = mean(UR, na.rm=TRUE) )
+
+
+
+
+
+
+
+
+
+# ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+#
+#                    All Old Code Below: To be DELETED
+#
+# ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+
+# ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+#
+#                    All Old Code Below: To be DELETED
+#
+# ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+
+# ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+#
+#                    All Old Code Below: To be DELETED
+#
+# ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+
+#
+# [TBD]: 
+#  - [Done] Combine controls
+#  - [Done] Combine manifest
+#  - [TBD]: Add EPICv2 manifest
+#
+#  - [TBD]: Add remaining Sesame Workflow calls
+#  - [TBD]: Add rm_outliers wrapper or provide in output
+#
+#  - [TBD]: Run all MSA/EPICv1 data
+#           - Combine EPIC/MSA Idat lists
+#
+
+# [TBD]: Build EPIC/MSA and then test with Sesame + Controls
+# - MSA should be msa_all_ctls_tib
+# - EPIC should be all_man_tib %>% dplyr::filter( Manifest == "ctl" & Manifest_Version == "B4" )
+#
+# [TBD]: Create an Rcpp wrapper that takes a list and then runs in parallel in
+#   in the Rcpp function
+#
+
+pre_sdf_list <- NULL
+
+rm_outliers_vec <- NULL
+# rm_outliers_vec <- c( TRUE )
+rm_outliers_vec <- c( TRUE, FALSE )
+
+run_pre_build <- TRUE
+run_pre_build <- FALSE
+
+if ( run_pre_build ) {
+  
+  # ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+  #
+  #                    Pre-processing:: All MSA Data::
+  #
+  # Technically This needs to be done once!
+  #  Should Just Copy: scratch/stable_imSesameCpp_MSAv1/MSAv10-NCBI-v18/pre_sdf/ok-outliers/read_idat_pair_r
+  #
+  # ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+  
+  for ( rm_outliers in rm_outliers_vec ) {
+    outliers_str <- "rm-outliers"
+    if ( !rm_outliers ) outliers_str <- "ok-outliers"
+    pre_sdf_path <- safe_mkdir( file.path( opt$out_path, "pre_sdf",outliers_str ) )
+    
+    pre_sdf_list[[outliers_str]] <- NULL
+    
+    if ( opt$parallel ) {
+      pre_sdf_list[[outliers_str]] <- sentrix_list %>% # head(n=2) %>%
+        mclapply( function( x, d=pre_sdf_path ) {
+          
+          idat_tib <- NULL
+          idat_tib <- read_idat_pair_r( 
+            prefix = x$Sentrix_Path,
+            
+            neg_vec = msa_neg_ctls_tib$Address %>% as.vector(),
+            man_tib = dplyr::bind_rows( msa_man_tib,all_man_tib ),
+            ctl_tib = msa_all_ctls_tib,
+            
+            workflow_vec = c("i"),
+            # sesame_work_str = "DB",
+            
+            # min_pval = min_pval, 
+            min_pval = opt$pre_pval,
+            
+            min_beta = opt$min_beta,
+            max_beta = opt$max_beta,
+            min_perO = opt$min_perO,
+            min_perI = opt$min_perI,
+            rm_outliers = rm_outliers,
+            
+            # out_dir = file.path( pre_sdf_path, paste0(x$Sentrix_Name) ), 
+            # out_dir = pre_sdf_path,
+            out_dir = d,
+            run_tag = paste( x$Sentrix_Name,outliers_str, sep="_" ),
+            
+            reload = opt$reload, reload_min = 10, # 10,
+            ret_data = 10, 
+            parallel = opt$parallel, write_out = TRUE,
+            
+            vb=vb,vt=vt+1,tc=tc, tt=tt )
+          
+        })
+    } else {
+      pre_sdf_list[[outliers_str]] <- sentrix_list %>% # head(n=2) %>%
+        lapply( function( x, d=pre_sdf_path ) {
+          
+          idat_tib <- NULL
+          idat_tib <- read_idat_pair_r( 
+            prefix = x$Sentrix_Path,
+            
+            neg_vec = msa_neg_ctls_tib$Address %>% as.vector(),
+            man_tib = dplyr::bind_rows( msa_man_tib,all_man_tib ),
+            ctl_tib = msa_all_ctls_tib,
+            
+            workflow_vec = c("i"),
+            # sesame_work_str = "DB",
+            
+            # min_pval = min_pval, 
+            min_pval = opt$pre_pval,
+            
+            min_beta = opt$min_beta,
+            max_beta = opt$max_beta,
+            min_perO = opt$min_perO,
+            min_perI = opt$min_perI,
+            rm_outliers = rm_outliers,
+            
+            # out_dir = file.path( pre_sdf_path, paste0(x$Sentrix_Name) ), 
+            # out_dir = pre_sdf_path,
+            out_dir = d,
+            run_tag = paste( x$Sentrix_Name,outliers_str, sep="_" ),
+            
+            reload = opt$reload, reload_min = 10, # 10,
+            ret_data = 10, 
+            parallel = opt$parallel, write_out = TRUE,
+            
+            vb=vb,vt=vt+1,tc=tc, tt=tt )
+          
+        })
+    }
+  }
+}
+
+# ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+#
+#                    Data-processing:: Standard Sesame::
+#
+# ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+
+#
+# [TBD]: Need to run straight Sesame for comparison to determine the improvement
+#   resulting from the readr_idat_pair_rcpp()
+#
+
+# opt$parallel <- FALSE
+if ( FALSE ) {
+  cur_sdfs <- NULL
+  if ( opt$parallel ) {
+    cur_sdfs <- mclapply( exp_idat_lst,
+                          prefix_to_sdf, 
+                          platform = "EPIC", 
+                          manifest = exp_man_tib, 
+                          controls = exp_ctl_tib, 
+                          out_dir  = exp_out_dir,
+                          run_tag  = opt$run_name,
+                          reload   = opt$reload, 
+                          reload_min = 10,
+                          parallel = opt$parallel, 
+                          vb=vb, vt=vt, tc=0, tt = tt )
+  } else {
+    cur_sdfs <- lapply( exp_idat_lst,
+                        prefix_to_sdf, 
+                        platform = "EPIC", 
+                        manifest = exp_man_tib, 
+                        controls = exp_ctl_tib, 
+                        out_dir  = exp_out_dir,
+                        run_tag  = opt$run_name,
+                        reload   = opt$reload, 
+                        reload_min = 10,
+                        parallel = opt$parallel, 
+                        vb=vb, vt=vt, tc=0, tt = tt )
+  }
+}
+
+# ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+#
+#                      Reload Pre-Processed Data
+#
+# ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+
+#
+# [TBD]: Replace opt$out_path with "pre_sdf_src" if that's pre-built...
+#
+#
+# Critical Next Steps:
+# [TBD]: Add Replicate P-value screening
+# [TBD]: Add Build both rm/ok-outliers [paralelle]
+# [TBD]: Update Order of Operations
+# [TBD]: Run Sesame Directly without read_idat_pair_rcpp()
+# [TBD]: Compare Results against weighted score
+# [TBD]: Compare Results against EPICs (v1/v2)
+# [TBD]: Analyze Genotypes
+#
+
+#
+# Run Time Parameters::
+#
+opt$single_neg <- FALSE
+opt$single_neg <- TRUE
+
+opt$single_sam <- FALSE
+opt$single_sam <- TRUE
+
+opt$run_sesame <- FALSE
+opt$run_sesame <- TRUE
+
+opt$single_pval <- FALSE
+opt$single_pval <- TRUE
+
+opt$single_work <- FALSE
+opt$single_work <- TRUE
+
+# [TBD]: Restrict to 250
+# [TBD]: Reduce number of fields
+# [TBD]: Add correct labling from SNV_scratch
+# [TBD]: Capture min_pval applied
+
+opt$min_pval_vec <- c( 1.0, 0.1, 0.5 )
+
+opt$work_step_vec <- c( "DCPB", "DPB", 
+                        "DCNB", "DNB"  )
+
+all_data_tab <- NULL
+exp_data_tab <- NULL
+negs_sdf_tab <- NULL
+auto_ssh_tab <- NULL
+
+dB_min_all_tib <- NULL
+dB_max_all_tib <- NULL
+
+# ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+#                    Data-processing:: Titraiton Sample List
+# ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+
+rm_outliers_vec <- c( TRUE )
+rm_outliers_vec <- c( TRUE, FALSE )
+for ( rm_outliers in rm_outliers_vec ) {
+  outliers_str <- "rm-outliers"
+  if ( !rm_outliers ) outliers_str <- "ok-outliers"
+  
+  sdf_paths <- NULL
+  sdf_paths <- list.files( 
+    path = file.path( opt$out_path, "pre_sdf",outliers_str ), 
+    pattern = paste0("_",outliers_str,".read_idat_pair_r.rds$"), 
+    recursive = TRUE, full.names = TRUE )
+  
+  probe_map <- NULL
+  probe_map <- readr::read_rds( file = sdf_paths[length(sdf_paths)] ) %>% 
+    dplyr::mutate( Probe_Idx = dplyr::row_number() ) %>%
+    dplyr::select( Probe_ID, Probe_Idx )
+  
+  # Load File List::
+  cur_pre_sdf_tib <- NULL
+  cur_pre_sdf_tib <- file_list( path    = file.path( opt$out_path, "pre_sdf",outliers_str ),
+                                prefix  = file.path( opt$out_path, "pre_sdf",outliers_str ),
+                                pattern = paste0("_",outliers_str,".read_idat_pair_r.rds$"),
+                                suffix  = paste0("_",outliers_str,".read_idat_pair_r.rds"),
+                                recursive = TRUE,
+                                vb=vb,vt=vt+3,tc=tc ) %>%
+    dplyr::bind_rows( .id = "Sentrix_Name" ) %>% 
+    t() %>% as.data.frame() %>% 
+    tibble::rownames_to_column( var = "Sentrix_Name") %>% 
+    magrittr::set_names( c("Sentrix_Name", "Pre_SDF_Path") ) %>%
+    tibble::as_tibble()
+  
+  cur_pre_ssh_tib <- NULL
+  cur_pre_ssh_tib <- file_list( path    = file.path( opt$out_path, "pre_sdf",outliers_str ),
+                                prefix  = file.path( opt$out_path, "pre_sdf",outliers_str ),
+                                pattern = paste0(".sample_sheet.csv$"),
+                                suffix  = paste0(".sample_sheet.csv"),
+                                recursive = TRUE,
+                                vb=vb,vt=vt+3,tc=tc ) %>%
+    dplyr::bind_rows( .id = "Sentrix_Name" ) %>% 
+    t() %>% as.data.frame() %>% 
+    tibble::rownames_to_column( var = "Sentrix_Name") %>% 
+    magrittr::set_names( c("Sentrix_Name", "Pre_SSH_Path") ) %>%
+    tibble::as_tibble()
+  
+  for ( min_pval in opt$min_pval_vec ) {
+    min_pval_str <- paste0("pval-",min_pval)
+    for ( work_step in opt$work_step_vec  ) {
+      work_step_str <- paste0("work-",work_step)
+      
+      # Need proper SDF output directory:
+      cur_out_path <- NULL
+      cur_out_path <- safe_mkdir( 
+        dir = file.path(opt$out_path,"sdf", outliers_str,min_pval_str,work_step_str ) )
+      
+      dB_min_all_csv <- NULL
+      dB_min_all_csv <- file.path( opt$out_path, paste0( 
+        opt$run_name,"_",work_step,"_pre-pval-",min_pval,"_dB_min_all.csv.gz") )
+      dB_max_all_csv <- NULL
+      dB_max_all_csv <- file.path( opt$out_path, paste0( 
+        opt$run_name,"_",work_step,"_min-pval-1.0_dB_max_all.csv.gz") )
+      auto_ssh_rds <- NULL
+      auto_ssh_rds <- file.path( opt$out_path, paste0( opt$run_name,"_pre-pval-",opt$pre_pval,"_auto_ssh.rds") )
+      
+      for ( exp_name in names(sel_ssh_list) ) {
+        all_beta_tibs <- NULL
+        all_poob_tibs <- NULL
+        all_negs_tibs <- NULL
+        
+        # if ( exp_name == "T0_CC_250" ) next
+        # exp_name <- "titration_0_100"
+        # exp_name <- "uhm_0_50"
+        # exp_name <- "T1_UH"
+        # exp_name <- "T1_UM_250"
+        # exp_name <- "T1_UH_250"
+        # exp_name <- "T1_HM_250"
+        
+        # Skip Normal Samples::
+        # if ( exp_name %>% stringr::str_starts("T1_NA") ) next
+        if ( exp_name %>% stringr::str_starts("T1_R[0-9]") ) next
+        if ( !exp_name %>% stringr::str_ends("_250") ) next
+        
+        if ( p1 ) cat(glue::glue("{pmssg} Current exp_name = '{exp_name}'{RET}"))
+        
+        # ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+        #                    Data-processing:: Sentrix Sample List
+        # ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+        
+        # [TBD]: Group by Sample_Base
+        ssh_sel_tibs <- NULL
+        ssh_sel_tibs <- sel_ssh_list[[exp_name]] %>% 
+          # dplyr::inner_join( cur_pre_file_tib, by=c("Sentrix_Name") ) %>% 
+          dplyr::inner_join( cur_pre_sdf_tib, by=c("Sentrix_Name") ) %>%
+          dplyr::inner_join( cur_pre_ssh_tib, by=c("Sentrix_Name") ) %>%
+          dplyr::group_by( Sample_Base ) %>%
+          dplyr::mutate( Rep_Idx = dplyr::row_number(),
+                         Rep_Key = paste( Sample_Base,Rep_Idx, sep="_") ) %>%
+          dplyr::ungroup()
+        
+        ssh_sel_list <- NULL
+        ssh_sel_list <- ssh_sel_tibs %>% 
+          split( .$Sentrix_Name ) # %>% head( n=opt$max_sam_rep )
+        
+        # [TBD]: Screen this earlier...
+        if ( ssh_sel_list %>% length() < 3 ) next
+        
+        for ( sentrix_name in names(ssh_sel_list) ) {
+          
+          pre_sdf_path <- ssh_sel_list[[sentrix_name]]$Pre_SDF_Path
+          pre_ssh_path <- ssh_sel_list[[sentrix_name]]$Pre_SSH_Path
+          pre_sdf_tib <- readr::read_rds( file = pre_sdf_path )
+          pre_ssh_tib <- readr::read_csv( file = pre_ssh_path, show_col_types = FALSE )
+          
+          prefix      <- ssh_sel_list[[sentrix_name]]$Sentrix_Path
+          src_key     <- ssh_sel_list[[sentrix_name]]$Source_Key
+          ng_input    <- ssh_sel_list[[sentrix_name]]$Sample_Input
+          # sample_base <- ssh_sel_list[[sentrix_name]]$Sample_Base
+          sample_base <- ssh_sel_list[[sentrix_name]]$Sample_Name_rep
+          if ( ssh_sel_list[[sentrix_name]]$Sample_Base_Key == "E" || ssh_sel_list[[sentrix_name]]$Sample_Base_Key == "Z" )
+            sample_base <- ssh_sel_list[[sentrix_name]]$Sample_Name_uhm
+          
+          if ( p1 ) cat(glue::glue("{pmssg}{TAB} Current prefix({exp_name}) = '{prefix}'{RET}"))
+          if ( FALSE ) {
+            idat_tib <- pre_sdf_tib
+            
+            # Negative Controls that fail:
+            idat_tib %>% dplyr::filter( Probe_Type == "ct" ) %>% dplyr::filter( Probe_ID %>% stringr::str_starts("ctl_Negative_") ) %>% dplyr::filter( mask )
+            
+            sn <- 0.0001
+            neg_beta_den_ggg <- NULL
+            neg_beta_den_ggg <- idat_tib %>% 
+              dplyr::filter( Probe_Type == "ct" ) %>% 
+              dplyr::filter( Probe_ID %>% stringr::str_starts("ctl_Negative_") ) %>%
+              ggplot2::ggplot( aes( x=Beta_1, fill=mask) ) +
+              ggplot2::geom_density( alpha=0.2 )
+            
+            plot_tab <- NULL
+            plot_tab <- idat_tib %>% 
+              # dplyr::filter( Probe_Type == "ct" ) %>%
+              dplyr::filter( Probe_Type == "nn" |
+                               Probe_Type == "cg" | 
+                               # Probe_Type == "ch" | 
+                               # Probe_Type == "rs" |
+                               Probe_ID %>% stringr::str_starts("ctl_Negative_") |
+                               # Probe_ID %>% stringr::str_starts("ctl_BS_Conversion_I_") |
+                               # Probe_ID %>% stringr::str_starts("ctl_BS_Conversion_II_") |
+                               Probe_Type == "nn" ) %>%
+              dplyr::mutate( 
+                # Pval_Plot = as.integer( Pval_0 * 10 ),
+                Pval_Plot = dplyr::case_when(
+                  Pval_0 <= 0.01 ~ "pval <= 01",
+                  Pval_0 <= 0.05 ~ "pval <= 05",
+                  Pval_0 <= 0.10 ~ "pval <= 10",
+                  Pval_0 <= 0.20 ~ "pval <= 20",
+                  Pval_0 <= 0.30 ~ "pval <= 30",
+                  Pval_0 >  0.30 ~ "pval >  30",
+                  
+                  TRUE ~ NA_character_ ),
+                Plot_Name = dplyr::case_when(
+                  Probe_ID %>% stringr::str_starts("ctl_BS_Conversion_I_") ~ "B1",
+                  Probe_ID %>% stringr::str_starts("ctl_BS_Conversion_II_") ~ "B2",
+                  Probe_Type == "ct" ~ Probe_ID %>% stringr::str_remove("ctl_") %>% stringr::str_sub(1,2),
+                  TRUE ~ Probe_Type ),
+                int_sum = UG+UR+MG+MR
+              ) %>%
+              # dplyr::filter( int_sum < 10000 ) %>%
+              # dplyr::filter( int_sum < 2000 ) %>%
+              # dplyr::filter( int_sum < 1000 ) %>%
+              tidyr::pivot_longer( cols = c(UG,UR,MG,MR), 
+                                   names_to = "Color", 
+                                   values_to = "Intensity", 
+                                   values_drop_na = TRUE ) %>%
+              dplyr::filter( Intensity != 0 ) 
+            
+            prb_ints_den_ggg <- plot_tab %>%
+              # ggplot2::ggplot( aes( x=log(Intensity+sn), fill=Color) ) +
+              ggplot2::ggplot( aes( x=Intensity, fill=Color ) ) +
+              ggplot2::geom_density( alpha=0.2 ) +
+              ggplot2::facet_grid( rows = vars(Pval_Plot), # cols = vars(mask),
+                                   cols = vars(Plot_Name) )
+            prb_ints_den_ggg
+            
+            plot_tab %>% dplyr::group_by( Plot_Name,Pval_Plot ) %>%
+              dplyr::summarise( Count=n(), .groups = "drop" )
+            
+            # Count Stats::
+            idat_sum1 <- idat_tib %>% print_sum( vec = c("Probe_Type"),
+                                                 vb=vb+1,vt=vt,tc=tc+1, tt=tt )
+            idat_sum2 <- idat_tib %>% print_sum( vec = c("Probe_Type","mask"),
+                                                 vb=vb+1,vt=vt,tc=tc+1, tt=tt )
+            idat_sum3 <- idat_tib %>% print_sum( vec = c("Probe_Type","mask_0"),
+                                                 vb=vb+1,vt=vt,tc=tc+1, tt=tt )
+          }
+          
+          # Pretty Sure we can just call this from the pre_sdf files...
+          if ( FALSE ) {
+            # How to measure outlier removal::
+            # 
+            negs_sdf <- NULL
+            negs_sdf <- idat_tib %>% dplyr::filter( Probe_Type == "ct" ) %>% 
+              dplyr::filter( Probe_ID %>% stringr::str_starts("ctl_Negative_") )
+            readr::write_csv( x = negs_sdf, file = cur_negs_csv )
+            
+            negs_sdf_tab <- negs_sdf_tab %>% 
+              dplyr::bind_rows(
+                dplyr::mutate( negs_sdf,
+                               Rm_Outliers = rm_outliers,
+                               Sample = exp_name ) %>%
+                  dplyr::select( Rm_Outliers,Sample, dplyr::everything() )
+              )
+          }
+          
+          #
+          # TBD:: Return select columns with appropriate data types in Rcpp...
+          #   - This will allow the code above to be removed!
+          #
+          
+          idat_tib <- pre_sdf_tib
+          if ( is.null(idat_tib) ) {
+            stop( glue::glue("{perrs} Failed to load idats: prefix='{prefix}'{RET}") )
+            break
+          }
+          
+          # ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+          #                       Data-processing:: Summary
+          # ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+          
+          idat_sum <- NULL
+          idat_sum <- print_sum( tib = idat_tib, vec = c("mask","Probe_Type","col"),
+                                 vb=vb,vt=vt,tc=tc, tt=tt )
+          
+          # ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+          #                   Data-processing:: Parse Control Data
+          # ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+          
+          if ( FALSE ) {
+            sdf_ctls_tib <- NULL
+            sdf_ctls_tib <- pre_sdf_tib %>% 
+              dplyr::filter(  stringr::str_starts( Probe_ID, pattern = "ct") ) %>%
+              dplyr::filter( !mask ) %>%
+              dplyr::select( Probe_ID:mask ) # %>% as.data.frame()
+            
+            man_ctl_tib <- NULL
+            man_ctl_tib <- msa_man_tib %>% 
+              dplyr::filter( stringr::str_starts( Probe_ID, pattern = "ct") ) %>%
+              dplyr::filter( Annotation == "NEGATIVE" ) %>%
+              dplyr::filter( Probe_ID %>% stringr::str_starts("ctl_Negative") ) %>%
+              dplyr::mutate( col = as.factor(col),
+                             U = dplyr::case_when( U==0 ~ NA_real_, TRUE ~ U ),
+                             M = dplyr::case_when( M==0 ~ NA_real_, TRUE ~ M ),
+                             Address = U,
+                             Sequence = "N",
+                             Type = "NEGATIVE",
+                             Color_Channel = "Red",
+                             Name = paste0( "Negative_",dplyr::row_number() )
+              ) %>% 
+              dplyr::select( Address,Type,Color_Channel,Name ) %>% 
+              dplyr::distinct( Address, .keep_all = TRUE )
+            
+            cur_ctl_tib <- sdf_to_sesame_ctls( pre_sdf_tib )
+            
+            # ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+            #                   Data-processing:: Workflow Pipeline
+            # ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+            
+            # Need the Genome Studio Version of Controls...
+            ses_sdf <- NULL
+            ses_sdf <- sesame::readIDATpair( prefix.path = prefix, 
+                                             manifest = msa_man_tib %>% dplyr::filter( !Probe_ID %>% stringr::str_starts("ct") ), 
+                                             controls = man_ctl_tib ) # %>% dplyr::mutate( M = NA_real_) )
+            
+            ses_sdf %>% tibble::as_tibble() %>% dplyr::filter( col=="2")
+            
+            sesame::controls(ses_sdf) %>% tibble::as_tibble()
+          } # END: FALSE
+          
+          work_sdf <- NULL
+          work_sdf <- pre_sdf_tib %>%
+            dplyr::mutate( col = as.factor(col)
+                           # U = dplyr::case_when( U==0 ~ NA_real_, TRUE ~ U ),
+                           # M = dplyr::case_when( M==0 ~ NA_real_, TRUE ~ M )
+            ) %>%
+            # dplyr::filter( !stringr::str_starts( Probe_ID, pattern = "ct") ) %>% 
+            dplyr::select( Probe_ID:mask ) %>%
+            as.data.frame() %>%
+            sesame::SigDF( # platform = "EPIC", 
+              ctl = pre_sdf_tib %>% 
+                dplyr::filter( stringr::str_starts( Probe_ID, pattern = "ct") ) %>%
+                dplyr::mutate( col = as.factor(col) ) %>%
+                dplyr::filter( !mask ) %>% 
+                dplyr::select( Probe_ID:mask ) %>%
+                as.data.frame()
+              
+              # ctl = msa_all_ctls_tib
+              # ctl = ctls_tib
+              # ctl = NULL
+            ) %>% dplyr::select( Probe_ID:mask )
+          
+          # work_sdf %>% dplyr::filter( !mask ) %>% dplyr::mutate( Probe_Type = Probe_ID %>% stringr::str_sub(1,2) ) %>% dplyr::group_by( Probe_Type,col ) %>% dplyr::summarise( Count=n(), .groups = "drop" )
+          
+          # [TBD]: Should Remove {Bi,DN,Ne} and all {ct} probes from analytical section...
+          # pre_sdf_tib %>% print_sum( vec = c("mask","Probe_Type","col") ) %>% print(n=1000)
+          # pre_sdf_tib %>% 
+          #   dplyr::filter( !stringr::str_starts( Probe_ID, pattern = "ct") ) %>%
+          #   print_sum( vec = c("mask","Probe_Type","col") ) %>% print(n=1000)
+          
+          # [TBD]: Does the line below do anything?
+          # sesame::controls(work_sdf) %>% tibble::as_tibble()
+          # work_sdf %>% tibble::as_tibble() %>% dplyr::filter( Probe_ID %>% stringr::str_starts("ct") )
+          # ses_files <- sesameData::sesameDataList() %>% as.data.frame() %>% tibble::as_tibble()
+          
+          work_sdf <- work_sdf %>% 
+            mutate_sdf_simple( 
+              steps = work_step, 
+              negs_min = 1.0, 
+              poob_min = 1.0, 
+              vb=vb+3,vt=vt,tc=tc )
+          
+          # [TBD]: Does the line below do anything?
+          # work_sdf %>% tibble::as_tibble() %>% dplyr::filter( col=="2")
+          
+          # work_sdf <- work_sdf %>% 
+          #   mutate_sdf_simple(
+          #     # steps = "B", # sesame::noob( sdf = sdf, combine.neg = TRUE,  offset = off_set ) [Assumed Standard]
+          #     steps = "b", # sesame::noob( sdf = sdf, combine.neg = FALSE, offset = off_set ) [Poob Only]
+          #     negs_min = 1.0, 
+          #     poob_min = 1.0 )
+          
+          # [TBD]: Does the line below do anything?
+          # work_sdf %>% tibble::as_tibble() %>% dplyr::filter( col=="2")
+          
+          rep_key <- NULL
+          rep_key <- ssh_sel_list[[sentrix_name]]$Rep_Key
+          
+          # ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+          #                   Data-processing:: Extract Beta Values
+          # ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+          
+          beta_tib <- NULL
+          beta_tib <- mutate_sdf_simple( 
+            sdf = cpp_sdf,
+            # steps = "V", # With masking...
+            steps = "v", # Without masking...
+            negs_min = 1.0, # negs_min = 0.05,
+            poob_min = 1.0, # poob_min = 0.05,
+            probe_id = "Probe_ID", beta_key = rep_key,
+            ret_tib = TRUE,
+            vb=vb, vt=vt, tc=tc )
+          
+          # ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+          #                   Data-processing:: Extract pooBAH P-Values
+          # ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+          
+          poob_tib <- NULL
+          poob_tib <- mutate_sdf_simple( 
+            sdf = cpp_sdf,
+            # steps = "n", # Without masking...
+            # For 'O' or 'o' or 'n' negs_min and poob_min don't matter because you're returning the full values...
+            steps = "O", 
+            negs_min = 1.0, # negs_min = 0.05,
+            poob_min = 1.0, # poob_min = 0.05,
+            probe_id = "Probe_ID", beta_key = rep_key,
+            ret_tib = TRUE,
+            vb=vb, vt=vt, tc=tc )
+          
+          poob_mat <- NULL
+          poob_mat <- as.matrix( poob_tib %>% tibble::column_to_rownames( var = "Probe_ID" ) )
+          
+          # [TBD]: Read Sample Sheet, but this should be done in an analysis function
+          #   so everything is separated: build -> analyze...
+          cur_auto_ssh_tib <- NULL
+          cur_auto_ssh_tib <- cur_pre_ssh_tib %>% dplyr::filter( Sentrix_Name == sentrix_name ) %>%
+            clean_tib() %>%
+            dplyr::mutate( Remove_Outliers = rm_outliers, 
+                           Experiment = exp_name,
+                           Pass_Poob_Cnt = which(  poob_mat <= min_pval ) %>% length(),
+                           Fail_Poob_Cnt = which( !poob_mat <= min_pval ) %>% length(),
+                           Pass_Poob_Per = round( 100 * Pass_Poob_Cnt/ (Fail_Poob_Cnt+Pass_Poob_Cnt), 3 )
+            ) %>% dplyr::select( Remove_Outliers,Experiment, 
+                                 dplyr::everything() )
+          # cur_auto_ssh_tib %>% as.data.frame() %>% print()
+          
+          auto_ssh_tab <- auto_ssh_tab %>% 
+            dplyr::bind_rows( cur_auto_ssh_tib )
+          
+          if ( cur_auto_ssh_tib$Pass_Poob_Per < opt$Pass_Pval_Min ) next
+          
+          #
+          # Aggregate Data Sets if they pass...
+          # [TBD]: Write all of this out and then select base on Call Rates...
+          #
+          
+          if ( is.null( all_beta_tibs[[sample_base]] ) ) {
+            all_beta_tibs[[sample_base]] <- beta_tib
+          } else {
+            all_beta_tibs[[sample_base]] <- all_beta_tibs[[sample_base]] %>% 
+              inner_join( beta_tib, by = c("Probe_ID") )
+          }
+          
+          if ( is.null( all_poob_tibs[[sample_base]] ) ) {
+            all_poob_tibs[[sample_base]] <- poob_tib
+          } else {
+            all_poob_tibs[[sample_base]] <- all_poob_tibs[[sample_base]] %>% 
+              inner_join( poob_tib, by = c("Probe_ID") )
+          }
+        }
+        
+        # [TBD]: Update this check for titration (2) vs. replicates (4)
+        #
+        # if ( is.null(all_beta_tibs[[sample_base]]) || 
+        #      all_beta_tibs[[sample_base]] %>% base::ncol() < 4 ) next
+        
+        if ( p0 ) cat(glue::glue("{pmssg} Finished Processing Idat Pairs sample='{exp_name}'.{RET2}"))
+        
+        #
+        # LEFT OFF HERE::
+        #  - [TBD]: Incorporate: {ng_input,rep_key}, could just pull from the sample sheet...
+        #
+        #  - [TBD]: Need to implement dual input matrices
+        #     - This will allow Titration efforts
+        #
+        # [TBD]: Incorporate weight score
+        # [TBD]: Add sample names
+        # [TBD]: Reduce output
+        # [TBD]: Add EPICv2
+        # [TBD]: Create Comparison Groups Sheet
+        #
+        # [Done]: Add More Stats...
+        #
+        # [TBD]: Split all_beta_tibs/all_poob_tibs into titration if titration experiment...
+        #
+        
+        # [TBD]: Add Poob Call Rate to sample sheets above...
+        # pval_pas_cnt <- which( as.matrix( all_poob_tibs[[1]] %>% tibble::column_to_rownames( var = "Probe_ID" ) ) <= 0.05 ) %>% length()
+        # pval_mis_cnt <- which( as.matrix( all_poob_tibs[[1]] %>% tibble::column_to_rownames( var = "Probe_ID" ) ) >  0.05 ) %>% length()
+        # pval_pas_per <- base::round( 100 * pval_pas_cnt / ( pval_pas_cnt+pval_mis_cnt ), 3 )
+        #
+        # min_pval <- 0.05
+        
+        cur_min_pval <- min_pval
+        cur_min_dB   <- opt$min_dB
+        cur_cmp_str  <- "lte"
+        cur_is_abs   <- TRUE
+        cur_dBe_max  <- 1.0
+        cur_dPe_max  <- 1.0
+        cur_dBe_fac  <- 1.0
+        cur_dPe_fac  <- 1.0
+        
+        exp_name1 <- exp_name
+        
+        all_beta_tibs2 <- NULL
+        all_poob_tibs2 <- NULL
+        all_negs_tibs2 <- NULL
+        exp_name2 <- NULL
+        
+        # [TBD]: Find a better way of spliting this up...
+        # Pretty Sure this isn't needed anymore...
+        # [TBD]: Remove code below...
+        if ( exp_name %>% stringr::str_starts("uhm_") ||
+             exp_name %>% stringr::str_starts("T1_UM") ||
+             exp_name %>% stringr::str_starts("T1_UH") ||
+             exp_name %>% stringr::str_starts("T1_HM") ) {
+          ssh_uhm_list <- NULL
+          ssh_uhm_list <- ssh_sel_tibs %>% split( .$Sample_Titration )
+          
+          exp_name1 <- ssh_uhm_list[[1]] %>% dplyr::distinct( Sample_Name_uhm ) %>% dplyr::pull( Sample_Name_uhm )
+          exp_name2 <- ssh_uhm_list[[2]] %>% dplyr::distinct( Sample_Name_uhm ) %>% dplyr::pull( Sample_Name_uhm )
+          
+          all_beta_tibs2 <- all_beta_tibs[[2]]
+          all_poob_tibs2 <- all_poob_tibs[[2]]
+          # all_negs_tibs2 <- all_negs_tibs[[2]]
+          
+          if ( exp_name == "uhm_0_100" ||
+               exp_name == "T1_UM" ||
+               exp_name %>% stringr::str_ends("_UM_[0-9]+") ||
+               exp_name %>% stringr::str_ends("_UM") ) {
+            # cur_min_pval <- 1.0
+            cur_min_dB   <- 0.5
+            cur_cmp_str  <- "gt"
+            cur_is_abs   <- FALSE
+            cur_dBe_max  <-  0.0
+            cur_dPe_max  <-  1.0
+            cur_dBe_fac  <- -1.0
+            cur_dPe_fac  <-  1.0
+          }
+          if ( exp_name == "uhm_0_50" ||
+               exp_name == "T1_UH" ||
+               exp_name %>% stringr::str_ends("_UH_[0-9]+") ||
+               exp_name %>% stringr::str_ends("_UH") ) {
+            # cur_min_pval <- 1.0
+            cur_min_dB   <- 0.2
+            cur_cmp_str  <- "gt"
+            cur_is_abs   <- FALSE
+            cur_dBe_max  <-  0.0
+            cur_dPe_max  <-  1.0
+            cur_dBe_fac  <- -1.0
+            cur_dPe_fac  <-  1.0
+          }
+          if ( exp_name == "uhm_50_100" ||
+               exp_name == "T1_HM" ||
+               exp_name %>% stringr::str_ends("_HM_[0-9]+") ||
+               exp_name %>% stringr::str_ends("_HM") ) {
+            # cur_min_pval <- 1.0
+            cur_min_dB   <- 0.1
+            cur_cmp_str  <- "gt"
+            cur_is_abs   <- FALSE
+            cur_dBe_max  <-  0.0
+            cur_dPe_max  <-  1.0
+            cur_dBe_fac  <- -1.0
+            cur_dPe_fac  <-  1.0
+          }
+        }
+        
+        break
+        
+        # [TBD]: Update the usage of the name_strA/B. Currently doesn't really do antyhing...
+        cur_dB_min_all_tib <- NULL
+        cur_dB_min_all_tib <- calc_dBs( beta_tibA = all_beta_tibs[[1]],
+                                        pval_tibA = all_poob_tibs[[1]],
+                                        name_strA = exp_name1, # names(all_beta_tibs[[1]])[1]
+                                        
+                                        beta_tibB = all_beta_tibs2,
+                                        pval_tibB = all_poob_tibs2,
+                                        name_strB = exp_name2, # names(all_beta_tibs[[2]])[1]
+                                        
+                                        min_pval = cur_min_pval,
+                                        min_dB   = cur_min_dB, 
+                                        cmp_str  = cur_cmp_str,
+                                        is_abs   = cur_is_abs,
+                                        dBe_max  = cur_dBe_max,
+                                        dPe_max  = cur_dPe_max,
+                                        dBe_fac  = cur_dBe_fac,
+                                        dPe_fac  = cur_dPe_fac,
+                                        
+                                        # [TBD]: Change the output directory to not have replicate,
+                                        #        use experiment output directory instead...
+                                        # out_dir    = file.path( opt$out_path, "replicate" ),
+                                        # Not sure above statement matters...
+                                        #
+                                        out_dir    = file.path( cur_out_path,exp_name ),
+                                        run_tag    = exp_name, 
+                                        reload     = opt$reload,
+                                        reload_min = 10, 
+                                        # ret_data   = TRUE,
+                                        ret_data   = FALSE,
+                                        parallel   = opt$parallel,
+                                        
+                                        vb=vb+2,vt=vt+1,tc=tc+1, tt=tt ) %>% 
+          dplyr::rename( Probe_Idx = Probe_ID ) %>%
+          dplyr::mutate( Probe_Idx = Probe_Idx %>% as.integer() ) %>%
+          dplyr::inner_join( probe_map, by=c("Probe_Idx") ) %>%
+          dplyr::mutate( Probe_Type = Probe_ID %>% stringr::str_sub(1,2),
+                         Remove_Outliers = rm_outliers, 
+                         Experiment = exp_name ) %>%
+          dplyr::select( Probe_ID, dplyr::everything() ) %>%
+          tidyr::separate( Experiment, into=c("Set","Sam","Con"), sep="_", 
+                           remove = FALSE, convert = TRUE ) %>%
+          dplyr::mutate( 
+            dB_pas_class = as.integer(db_pas_per),
+            Grp = Sam %>% stringr::str_sub(2,2),
+            Sam = Sam %>% stringr::str_sub(1,1) ) %>%
+          dplyr::select( Remove_Outliers,Experiment,Set,Sam,Grp,Con,
+                         dplyr::everything() ) %>%
+          dplyr::mutate( 
+            min_pval = min_pval,
+            Con = dplyr::case_when( is.na(Con) ~ 300, TRUE ~ Con ) %>% as.integer(),
+            Sam = dplyr::case_when( Grp != "L" ~ paste0( Sam,Grp ), TRUE ~ Sam ),
+            Grp = dplyr::case_when( Grp != "L" ~ "T", TRUE ~ Grp )
+          )  %>% dplyr::select( Probe_ID,Probe_Type,
+                                min_pval,Remove_Outliers,
+                                Experiment,Grp,Sam,Con,
+                                dB_tot_cnt,
+                                db_pas_per,dB_avg,dB_med,wS_per ) # %>% clean_tib() 
+        
+        cur_dB_min_all_csv <- NULL
+        cur_dB_min_all_csv <- file.path( 
+          cur_out_path, paste0( 
+            opt$run_name,"_",work_step_str,"_",min_pval_str,"_",outliers_str,"_",exp_name,"_dB.sum.csv.gz" ) )
+        readr::write_csv( x = cur_dB_min_all_tib, file = cur_dB_min_all_csv )
+        
+        if ( FALSE ) {
+          den_wS_ggg <- NULL
+          den_wS_ggg <- cur_dB_tib %>% 
+            ggplot2::ggplot( aes( x=dB_med ) ) +
+            ggplot2::geom_density()
+          den_wS_ggg
+        }
+        
+        #
+        # Good plots below to better understand everything...
+        #
+        if ( FALSE ) {
+          
+          # Build CGN Versions::
+          #
+          cur_dB_min_cgn_tib <- NULL
+          cur_dB_min_cgn_tib <- cur_dB_min_all_tib %>%
+            dplyr::filter( Probe_Type == "cg" )
+          
+          cur_dB_max_cgn_tib <- NULL
+          cur_dB_max_cgn_tib <- cur_dB_max_all_tib %>%
+            dplyr::filter( Probe_Type == "cg" )
+          
+          # Get Correlations::
+          #
+          cur_dB_min_all_cor <- cor( x = cur_dB_min_all_tib$wS_per, 
+                                     y = cur_dB_min_all_tib$dB_med, 
+                                     use = "pairwise.complete.obs", method = "pearson" )
+          print(cur_dB_min_all_cor)
+          
+          cur_dB_min_cgn_cor <- cor( x = cur_dB_min_cgn_tib$wS_per, 
+                                     y = cur_dB_min_cgn_tib$dB_med, 
+                                     use = "pairwise.complete.obs", method = "pearson" )
+          print(cur_dB_min_cgn_cor)
+          
+          cur_dB_max_all_cor <- cor( x = cur_dB_max_all_tib$wS_per, 
+                                     y = cur_dB_max_all_tib$dB_med, 
+                                     use = "pairwise.complete.obs", method = "pearson" )
+          print(cur_dB_max_all_cor)
+          
+          cur_dB_max_cgn_cor <- cor( x = cur_dB_max_cgn_tib$wS_per, 
+                                     y = cur_dB_max_cgn_tib$dB_med, 
+                                     use = "pairwise.complete.obs", method = "pearson" )
+          print(cur_dB_max_cgn_cor)
+          
+          # BOX Plots::
+          #
+          box_dB_min_all_ggg <- NULL
+          box_dB_min_all_ggg <- cur_dB_min_all_tib %>% 
+            ggplot2::ggplot( aes(x=db_pas_per,y=wS_per, group = db_pas_per) ) + 
+            ggplot2::geom_boxplot( varwidth = TRUE )
+          box_dB_min_all_ggg
+          
+          box_dB_min_cgn_ggg <- NULL
+          box_dB_min_cgn_ggg <- cur_dB_min_cgn_tib %>% 
+            ggplot2::ggplot( aes(x=db_pas_per,y=wS_per, group = db_pas_per) ) + 
+            ggplot2::geom_boxplot( varwidth = TRUE )
+          box_dB_min_cgn_ggg
+          
+          box_dB_max_all_ggg <- NULL
+          box_dB_max_all_ggg <- cur_dB_max_all_tib %>% 
+            ggplot2::ggplot( aes(x=db_pas_per,y=wS_per, group = db_pas_per) ) + 
+            ggplot2::geom_boxplot( varwidth = TRUE )
+          box_dB_max_all_ggg
+          
+          box_dB_max_cgn_ggg <- NULL
+          box_dB_max_cgn_ggg <- cur_dB_max_cgn_tib %>% 
+            ggplot2::ggplot( aes(x=db_pas_per,y=wS_per, group = db_pas_per) ) + 
+            ggplot2::geom_boxplot( varwidth = TRUE )
+          box_dB_max_cgn_ggg
+          
+          # D2D Plots::
+          #
+          d2d_dB_min_all_ggg <- NULL
+          d2d_dB_min_all_ggg <- cur_dB_min_all_tib %>% 
+            ggplot2::ggplot( aes( x=dB_med, y=wS_per ) ) +
+            ggplot2::geom_density2d()
+          d2d_dB_min_all_ggg
+          
+          d2d_dB_min_cgn_ggg <- NULL
+          d2d_dB_min_cgn_ggg <- cur_dB_min_cgn_tib %>% 
+            ggplot2::ggplot( aes( x=dB_med, y=wS_per ) ) +
+            ggplot2::geom_density2d()
+          d2d_dB_min_cgn_ggg
+          
+          d2d_dB_max_all_ggg <- NULL
+          d2d_dB_max_all_ggg <- cur_dB_max_all_tib %>% 
+            ggplot2::ggplot( aes( x=dB_med, y=wS_per ) ) +
+            ggplot2::geom_density2d()
+          d2d_dB_max_all_ggg
+          
+          d2d_dB_max_cgn_ggg <- NULL
+          d2d_dB_max_cgn_ggg <- cur_dB_max_cgn_tib %>% 
+            ggplot2::ggplot( aes( x=dB_med, y=wS_per ) ) +
+            ggplot2::geom_density2d()
+          d2d_dB_max_cgn_ggg
+          
+        }
+        
+        # [TBD]: Need to plot EPIC correlation against db_pas_per & wS_per, which is better
+        # cur_dat$ret_tib %>% dplyr::filter( is.na(wS_per) )
+        
+        dB_min_all_tib <- dB_min_all_tib %>% dplyr::bind_rows( cur_dB_min_all_tib )
+        # dB_max_all_tib <- dB_max_all_tib %>% dplyr::bind_rows( cur_dB_max_all_tib )
+        
+        if ( opt$single_work ) break
+      }
+      if ( opt$single_pval ) break
+    }
+    if ( opt$single_sam ) break
+  }
+  if ( opt$single_neg ) break
+}
+
+
+#
+# Silly Sesame Testing...
+#
+if ( FALSE ) {
+  tmp_man <- readr::read_rds( file.path( opt_rcpp$top_path, "data/manifests/methylation/bgz/all_manifests.sub8.rds") ) %>% 
+    dplyr::mutate( col = dplyr::case_when( col == "2" ~ NA_character_, TRUE ~ col) )
+  tmp_ctl <- readr::read_rds( file.path( opt_rcpp$top_path, "data/manifests/methylation/bgz/all_negative_ctls.rds" ) ) %>% 
+    dplyr::mutate( col = "2" )
+  
+  # This works!!!
+  tmp_sdf <- NULL
+  tmp_sdf <- sesame::readIDATpair( 
+    prefix.path = file.path( opt_rcpp$top_path, "data/idats/idats_EPIC-8x1-DELTA-Core/203319730022/203319730022_R01C01" ),
+    platform = "",
+    manifest = NULL, # tmp_man,
+    controls = NULL, # tmp_ctl,
+    verbose = TRUE
+  )
+}
+
+# ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+#
+#                               Data Backup::
+#
+# ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+
+opt$save_sesame_dat <- TRUE
+opt$save_sesame_dat <- FALSE
+
+if ( opt$save_sesame_dat ) {
+  
+  readr::write_csv( x = dB_min_all_tib, file = dB_min_all_csv )
+  if ( p1 ) cat(glue::glue("{pmssg} Wrote dV Min All Data CSV = '{dB_min_all_csv}'{RET}"))
+  
+  readr::write_csv( x = dB_max_all_tib, file = dB_max_all_csv )
+  if ( p1 ) cat(glue::glue("{pmssg} Wrote dV Max All Data CSV = '{dB_max_all_csv}'{RET}"))
+  
+  readr::write_rds( x = auto_ssh_tab, file = auto_ssh_rds, compress = "gz" )
+  if ( p1 ) cat(glue::glue("{pmssg} Wrote All Data SSH = '{auto_ssh_rds}'{RET}"))
+  
+  
+  # readr::write_rds( x = all_data_tab, file = all_data_rds, compress = "gz" )
+  # if ( p1 ) cat(glue::glue("{pmssg} Wrote All Data RDS = '{all_data_rds}'{RET}"))
+  
+  # readr::write_rds( x = negs_sdf_tab, file = negs_sdf_rds, compress = "gz" )
+  # if ( p1 ) cat(glue::glue("{pmssg} Wrote All Data NEG = '{negs_sdf_rds}'{RET}"))
+  
+  # exp_data_tab <- NULL
+  # exp_data_tab <- all_data_tab %>%
+  #   tidyr::separate( Experiment, into=c("Set","Sam","Con"), sep="_", 
+  #                    remove = FALSE, convert = TRUE ) %>%
+  #   dplyr::mutate( 
+  #     dB_pas_class = as.integer(db_pas_per),
+  #     Grp = Sam %>% stringr::str_sub(2,2),
+  #     Sam = Sam %>% stringr::str_sub(1,1) ) %>%
+  #   dplyr::select( Remove_Outliers,Experiment,Set,Sam,Grp,Con,
+  #                  dplyr::everything() )
+  # readr::write_rds( x = exp_data_tab, file = exp_data_rds, compress = "gz" )
+  # if ( p1 ) cat(glue::glue("{pmssg} Wrote All Data RDS = '{exp_data_rds}'{RET}"))
+}
+
+#
+# Quick Plotting Within::
+#
+sub_data_tib <- NULL
+sub_data_tib <- dplyr::bind_rows( dB_min_all_tib,dB_max_all_tib ) %>% 
+  dplyr::mutate( 
+    Sam = dplyr::case_when(
+      Experiment == "T1_NA11922_250" ~ "N1",
+      Experiment == "T1_NA12752_250" ~ "N2",
+      Experiment == "T1_NA12877_250" ~ "NF",
+      Experiment == "T1_NA12878_250" ~ "NM",
+      Experiment == "T1_NA12882_250" ~ "N3",
+      Experiment == "T1_NA1879_250"  ~ "N4",
+      TRUE ~ Sam
+    ),
+    Grp = dplyr::case_when(
+      Sam == "NA" ~ "N",
+      Sam %>% stringr::str_starts("N") ~ "N",
+      TRUE ~ Grp
+    )
+  ) %>% dplyr::rename( db_per = db_pas_per )
+
+sub_data_sum <- NULL
+sub_data_sum <- sub_data_tib %>% 
+  print_sum( vec = c("min_pval","Remove_Outliers","Grp","Sam","Con"),
+             vb=vb+2,vt=vt,tc=tc )
+
+# uhm_pval <- 1.0
+# rep_pval <- 0.1
+# nas_pval <- 0.1
+min_pval_vec <- c( 1.0,0.1 )
+
+wS_min_mat <- NULL
+wS_min_mat <- base::matrix( nrow = 3, ncol = 3 )
+wS_min_mat[1,1] <- 25
+wS_min_mat[1,2] <- 10
+wS_min_mat[1,3] <-  5
+
+wS_min_mat[2,1] <- 50
+wS_min_mat[2,2] <- 20
+wS_min_mat[2,3] <- 10
+
+wS_min_mat[3,1] <- 75
+wS_min_mat[3,2] <- 30
+wS_min_mat[3,3] <- 15
+
+pp_per_vec <- c( 70,80,90 )
+
+metric_vec <- c( "db_per", "wS_per")
+ptype_vec <- c( "cg", "ch", "rs" )
+
+opt$single_stats0 <- TRUE
+opt$single_stats0 <- FALSE
+
+opt$single_stats1 <- TRUE
+opt$single_stats1 <- FALSE
+
+opt$single_stats2 <- TRUE
+opt$single_stats2 <- FALSE
+
+opt$single_stats3 <- TRUE
+opt$single_stats3 <- FALSE
+
+opt$single_stats4 <- TRUE
+opt$single_stats4 <- FALSE
+
+opt$single_stats5 <- TRUE
+opt$single_stats5 <- FALSE
+
+stats_sum_tib <- NULL
+stats_prb_tib <- NULL
+for ( mm in c(1:base::nrow(wS_min_mat) ) ) {
+  for ( metric_str in metric_vec ) {
+    pp_sym <- NULL
+    pp_sym <- rlang::sym( metric_str )
+    
+    for ( pp_min in pp_per_vec ) {
+      for ( rm_out in c(TRUE,FALSE) ) {
+        for ( min_pval in min_pval_vec ) {
+          
+          stats_prb_key <- paste(mm,metric_str,pp_min,rm_out )
+          stats_prb_tib[[stats_prb_key]] <- NULL
+          for ( ptype in ptype_vec ) {
+            
+            # pp_min <- NULL
+            # if ( metric_str == "wS_per" ) {
+            #   pp_min <- wS_per_min
+            # } else if ( metric_str == "db_per" ) {
+            #   pp_min <- pp_per_min
+            # } else {
+            #   stop( glue::glue("[{perrs}]: Metric String is not valid: '{metric_str}'!{RET2}") )
+            #   break
+            # }
+            
+            sub_data_cnt <- NULL
+            sub_data_cnt <- sub_data_tib %>%
+              dplyr::filter( Probe_Type == ptype ) %>%
+              dplyr::filter( Remove_Outliers == rm_out ) %>%
+              dplyr::filter( Con == 250 ) %>%
+              dplyr::distinct( Probe_ID ) %>%
+              base::nrow()
+            
+            # ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+            #                          Screening:: Titration
+            # ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+            
+            # A tibble: 283,133 × 1
+            uhm_data_tib <- NULL
+            uhm_data_tib <- sub_data_tib %>%
+              dplyr::filter( Probe_Type == ptype ) %>%
+              dplyr::filter( min_pval == min_pval ) %>%
+              dplyr::filter( Grp == "T" ) %>%
+              dplyr::filter( Remove_Outliers == rm_out ) %>%
+              dplyr::filter( Con == 250 )
+            
+            # A tibble: 283,133 × 1
+            uhm_data_cnt <- NULL
+            uhm_data_cnt <- uhm_data_tib %>% dplyr::distinct( Probe_ID ) %>%
+              base::nrow()
+            
+            t1_tib <- NULL
+            t2_tib <- NULL
+            t3_tib <- NULL
+            if ( metric_str == "wS_per" ) {
+              t1_tib <- dplyr::filter( uhm_data_tib, Grp == "T", Sam == "UM" & wS_per > wS_min_mat[mm,1] )
+              t2_tib <- dplyr::filter( uhm_data_tib, Grp == "T", Sam == "UH" & wS_per > wS_min_mat[mm,2] )
+              t3_tib <- dplyr::filter( uhm_data_tib, Grp == "T", Sam == "HM" & wS_per > wS_min_mat[mm,3] )
+            } else if ( metric_str == "db_per" ) {
+              t1_tib <- dplyr::filter( uhm_data_tib, Grp == "T", Sam == "UM" & db_per > pp_min ) # pp_um_min )
+              t2_tib <- dplyr::filter( uhm_data_tib, Grp == "T", Sam == "UH" & db_per > pp_min ) # pp_uh_min )
+              t3_tib <- dplyr::filter( uhm_data_tib, Grp == "T", Sam == "HM" & db_per > pp_min ) # pp_hm_min )
+            } else {
+              stop( glue::glue("[{perrs}]: Metric String is not valid: '{metric_str}'!{RET2}") )
+              break
+            }
+            
+            # A tibble: 274,267 × 1
+            uhm_sel_data_tib <- NULL
+            uhm_sel_data_tib <- uhm_data_tib %>% 
+              dplyr::distinct( Probe_ID ) %>%
+              dplyr::filter( Probe_ID %in% t1_tib$Probe_ID ) %>%
+              dplyr::filter( Probe_ID %in% t2_tib$Probe_ID ) %>%
+              dplyr::filter( Probe_ID %in% t3_tib$Probe_ID )
+            
+            uhm_sel_data_cnt <- NULL
+            uhm_sel_data_cnt <- uhm_sel_data_tib %>% dplyr::distinct( Probe_ID ) %>% base::nrow()
+            uhm_sel_data_per <- NULL
+            uhm_sel_data_per <- round( 100 * uhm_sel_data_cnt / uhm_data_cnt, 3 )
+            
+            # ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+            #              Screening:: Replicates (Cancer Cell Lines)
+            # ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+            
+            # A tibble: 283,133 × 1
+            rep_data_tib <- NULL
+            rep_data_tib <- sub_data_tib %>%
+              dplyr::filter( Probe_Type == ptype ) %>%
+              dplyr::filter( min_pval == min_pval ) %>%
+              dplyr::filter( Grp == "L" ) %>%
+              dplyr::filter( Remove_Outliers == rm_out ) %>%
+              dplyr::filter( Con == 250 )
+            
+            # A tibble: 283,133 × 1
+            rep_data_cnt <- NULL
+            rep_data_cnt <- rep_data_tib %>% dplyr::distinct( Probe_ID ) %>%
+              base::nrow()
+            
+            lH_tib <- NULL
+            lJ_tib <- NULL
+            lK_tib <- NULL
+            lM_tib <- NULL
+            lR_tib <- NULL
+            
+            lH_tib <- dplyr::filter( rep_data_tib, Grp == "L", Sam == "H" & !!pp_sym > pp_min )
+            lJ_tib <- dplyr::filter( rep_data_tib, Grp == "L", Sam == "J" & !!pp_sym > pp_min )
+            lK_tib <- dplyr::filter( rep_data_tib, Grp == "L", Sam == "K" & !!pp_sym > pp_min )
+            lM_tib <- dplyr::filter( rep_data_tib, Grp == "L", Sam == "M" & !!pp_sym > pp_min )
+            lR_tib <- dplyr::filter( rep_data_tib, Grp == "L", Sam == "R" & !!pp_sym > pp_min )
+            
+            # A tibble: 278,467 × 1
+            rep_sel_data_tib <- NULL
+            rep_sel_data_tib <- rep_data_tib %>% 
+              dplyr::distinct( Probe_ID ) %>%
+              dplyr::filter( Probe_ID %in% lH_tib$Probe_ID ) %>%
+              dplyr::filter( Probe_ID %in% lJ_tib$Probe_ID ) %>%
+              dplyr::filter( Probe_ID %in% lK_tib$Probe_ID ) %>%
+              dplyr::filter( Probe_ID %in% lM_tib$Probe_ID ) %>%
+              dplyr::filter( Probe_ID %in% lR_tib$Probe_ID )
+            
+            rep_sel_data_cnt <- NULL
+            rep_sel_data_cnt <- rep_sel_data_tib %>% dplyr::distinct( Probe_ID ) %>% base::nrow()
+            rep_sel_data_per <- NULL
+            rep_sel_data_per <- round( 100 * rep_sel_data_cnt / rep_data_cnt, 3 )
+            
+            # ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+            #              Screening:: Replicates (Ceph Cell Lines)
+            # ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+            
+            nas_data_tib <- NULL
+            nas_data_tib <- sub_data_tib %>%
+              dplyr::filter( Probe_Type == ptype ) %>%
+              dplyr::filter( min_pval == min_pval ) %>%
+              dplyr::filter( Grp == "N" ) %>%
+              dplyr::filter( Remove_Outliers == rm_out ) %>%
+              dplyr::filter( Con == 250 )
+            
+            nas_data_cnt <- NULL
+            nas_data_cnt <- nas_data_tib %>% dplyr::distinct( Probe_ID ) %>%
+              base::nrow()
+            
+            N1_tib <- NULL
+            N2_tib <- NULL
+            N3_tib <- NULL
+            N4_tib <- NULL
+            NF_tib <- NULL
+            NM_tib <- NULL
+            
+            N1_tib <- dplyr::filter( nas_data_tib, Grp == "N", Sam == "N1" & !!pp_sym > pp_min )
+            N2_tib <- dplyr::filter( nas_data_tib, Grp == "N", Sam == "N2" & !!pp_sym > pp_min )
+            N3_tib <- dplyr::filter( nas_data_tib, Grp == "N", Sam == "N3" & !!pp_sym > pp_min )
+            N4_tib <- dplyr::filter( nas_data_tib, Grp == "N", Sam == "N4" & !!pp_sym > pp_min )
+            NF_tib <- dplyr::filter( nas_data_tib, Grp == "N", Sam == "NF" & !!pp_sym > pp_min )
+            NM_tib <- dplyr::filter( nas_data_tib, Grp == "N", Sam == "NM" & !!pp_sym > pp_min )
+            
+            nas_sel_data_tib <- NULL
+            nas_sel_data_tib <- nas_data_tib %>% 
+              dplyr::distinct( Probe_ID ) %>%
+              dplyr::filter( Probe_ID %in% N1_tib$Probe_ID ) %>%
+              dplyr::filter( Probe_ID %in% N2_tib$Probe_ID ) %>%
+              dplyr::filter( Probe_ID %in% N3_tib$Probe_ID ) %>%
+              dplyr::filter( Probe_ID %in% N4_tib$Probe_ID ) %>%
+              dplyr::filter( Probe_ID %in% NF_tib$Probe_ID ) %>%
+              dplyr::filter( Probe_ID %in% NM_tib$Probe_ID )
+            
+            nas_sel_data_cnt <- NULL
+            nas_sel_data_cnt <- nas_sel_data_tib %>% dplyr::distinct( Probe_ID ) %>% base::nrow()
+            nas_sel_data_per <- NULL
+            nas_sel_data_per <- round( 100 * nas_sel_data_cnt / nas_data_cnt, 3 )
+            
+            # ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+            #                         Screening:: Combine Data
+            # ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+            
+            fin_sel_cnt <- NULL
+            fin_sel_tib <- NULL
+            if ( ptype == "cg" ) {
+              fin_sel_tib <- uhm_sel_data_tib %>% 
+                dplyr::filter( Probe_ID %in% rep_sel_data_tib$Probe_ID ) %>%
+                dplyr::filter( Probe_ID %in% nas_sel_data_tib$Probe_ID )
+            } else {
+              fin_sel_tib <- rep_sel_data_tib %>% 
+                dplyr::filter( Probe_ID %in% nas_sel_data_tib$Probe_ID )
+            }
+            fin_sel_cnt <- fin_sel_tib %>% base::nrow()
+            stats_prb_tib[[stats_prb_key]] <- dplyr::bind_rows( 
+              stats_prb_tib[[stats_prb_key]],fin_sel_tib ) %>%
+              dplyr::distinct( Probe_ID )
+            
+            fin_sel_per <- NULL
+            fin_sel_per <- round( 100 * fin_sel_cnt / sub_data_cnt, 3 )
+            
+            stats_sum_tib <- stats_sum_tib %>% dplyr::bind_rows(
+              tibble::tibble(
+                Probe_Type = ptype,
+                Rm_Outlier = rm_out,
+                pp_Cutoffs = pp_min,
+                wS_Cutoffs = wS_min_mat[mm, ] %>% paste( collapse = "," ),
+                min_pval   = min_pval,
+                
+                uhm_selCnt = uhm_sel_data_cnt,
+                uhm_selTot = uhm_data_cnt,
+                uhm_selPer = uhm_sel_data_per,
+                
+                rep_selCnt = rep_sel_data_cnt,
+                rep_selTot = rep_data_cnt,
+                rep_selPer = rep_sel_data_per,
+                
+                nas_selCnt = nas_sel_data_cnt,
+                nas_selTot = nas_data_cnt,
+                nas_selPer = nas_sel_data_per,
+                
+                fin_selCnt = fin_sel_cnt,
+                fin_selTot = uhm_data_cnt,
+                fin_selPer = fin_sel_per,
+              )
+            )
+            if ( p1 ) cat(glue::glue(
+              # "{pmssg}",
+              "[Sum: {ptype}]: ",
+              "metric={metric_str}, ",
+              "rm-out={rm_out}, ",
+              "ws_min=",wS_min_mat[mm, ] %>% paste( collapse = "," ),", ",
+              "pp_min=",pp_min,", ",
+              "min_pval=",min_pval,", ",
+              "uhm: {uhm_sel_data_cnt}/{uhm_data_cnt} = {uhm_sel_data_per}, ",
+              "rep: {rep_sel_data_cnt}/{rep_data_cnt} = {rep_sel_data_per}, ",
+              "nas: {nas_sel_data_cnt}/{nas_data_cnt} = {nas_sel_data_per}, ",
+              "fin: {fin_sel_cnt}/{uhm_data_cnt} = {fin_sel_per}.{RET}"))
+            
+            if ( opt$single_stats0 ) break
+          }
+          if ( p1 ) cat(glue::glue("{RET}") )
+          if ( opt$single_stats1 ) break
+        }
+        if ( p1 ) cat(glue::glue("{RET}") )
+        if ( opt$single_stats2 ) break
+      }
+      if ( p1 ) cat(glue::glue("{RET}") )
+      if ( opt$single_stats3 ) break
+    }
+    if ( p1 ) cat(glue::glue("{RET}") )
+    if ( opt$single_stats4 ) break
+  }
+  if ( p1 ) cat(glue::glue("{RET}") )
+  if ( opt$single_stats5 ) break
+}
+
+# metric=db_per, rm-out=TRUE, ws_min=25,10,5, pp_min=70
+# 212397 + 2780 + 3860 = 219037
+# 283133 + 5591 + 4925 = 293649
+# 219037 / 293649 = 0.7459143
+
+# stats_prb_key = "1 wS_per 90 TRUE"
+# stats_prb_tib[[stats_prb_key]] %>% base::nrow() = 249318
+# metric=db_per, rm-out=TRUE, ws_min=90 25,10,5, pp_min=90
+# 243212 + 2605 + 3501 = 249318
+# 283133 + 5591 + 4925 = 293649
+# 249318 / 293649 = 0.8490341
+stats_250_csv <- file.path( opt$out_path, "select_250k_valid.cg-ch-rs.csv.gz" )
+stats_250_key <- "1 wS_per 90 TRUE"
+readr::write_csv( x = stats_prb_tib[[stats_250_key]], file = stats_250_csv )
+
+# stats_prb_key = "1 wS_per 70 TRUE"
+# stats_prb_tib[["1 wS_per 70 TRUE"]] %>% base::nrow() = 274963
+# metric=wS_per, rm-out=TRUE, ws_min=25,10,5, pp_min=70
+# 267154 + 3474 + 4335 = 274963
+# 283133 + 5591 + 4925 = 293649
+# 274963 / 293649 = 0.9363662
+stats_280_csv <- file.path( opt$out_path, "select_280k_valid.cg-ch-rs.csv.gz" )
+stats_280_key <- "1 wS_per 70 TRUE"
+readr::write_csv( x = stats_prb_tib[[stats_280_key]], file = stats_280_csv )
+
+# sub_data_tib %>% dplyr::filter( min_pval == 0.1 ) %>% dplyr::filter( min_pval == 0.1 & Grp == "T" & Remove_Outliers )
+
+# ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+#
+#                               Screening::
+#
+# ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+
+#
+# rm/ok Removal
+# Group by: { Probe_ID,Experiment } or { Probe_ID, Set,Sam,Con }
+# Join results
+#
+
+#
+# Need to loop over dB_min_all_tib/dB_max_all_tib
+#
+auto_ssh_tab <- readr::read_rds( file = auto_ssh_rds )
+if ( p1 ) cat(glue::glue("{pmssg} Loading All Data SSH = '{auto_ssh_rds}'{RET}"))
+
+pval_vec <- c("pval-1.0","pval-0.05")
+for ( pval_str in pval_vec ) {
+  cur_data_tib <- NULL
+  if ( pval_str == "pval-1.00" ) {
+    cur_data_tib <- readr::read_csv( file = dB_max_all_csv )
+    if ( p1 ) cat(glue::glue("{pmssg} Loading dV Max All Data CSV = '{dB_max_all_csv}'{RET}"))
+  }
+  if ( pval_str == "pval-0.05" ) {
+    cur_data_tib <- readr::read_csv( file = dB_min_all_csv )
+    if ( p1 ) cat(glue::glue("{pmssg} Loding dV Min All Data CSV = '{dB_min_all_csv}'{RET}"))
+  }
+  
+  rm_outliers_vec <- c( TRUE, FALSE )
+  for ( rm_outliers in rm_outliers_vec ) {
+    outliers_str <- "rm-outliers"
+    if ( !rm_outliers ) outliers_str <- "ok-outliers"
+    
+    param_key <- paste(outliers_str,pval_str, sep=".")
+    sel_path <- safe_mkdir( file.path(opt$out_path, "selection", pval_str, outliers_str) )
+    
+    exp_vec <- NULL
+    exp_vec <- cur_data_tib$Experiment %>% unique()
+    
+    sam_vec <- NULL
+    sam_vec <- cur_data_tib$Sam %>% unique()
+    
+    grp_vec <- NULL
+    grp_vec <- cur_data_tib$Grp %>% unique()
+    
+    con_vec <- NULL
+    con_vec <- cur_data_tib$Con %>% unique()
+    
+    cur_rep_data_tib <- cur_data_tib %>% dplyr::filter( Grp == "L" )
+    cur_uhm_data_tib <- cur_data_tib %>% dplyr::filter( Grp != "L" )
+    
+    cur_uhm_data_tib %>% head() %>% as.data.frame()
+    
+    # Need correlation and plots
+    
+    cur_uhm_sum_tib <- NULL
+    cur_uhm_sum_tib <- cur_uhm_data_tib %>% 
+      dplyr::group_by( Probe_ID,Remove_Outliers,Experiment ) %>%
+      dplyr::summarise( 
+        Full_Cnt = n(),
+        Pass_Cnt = count( db_pas_per >  90 ),
+        Fail_Cnt = count( db_pas_per <= 90 ),
+        Pass_Per = base::round( 100 * Pass_Cnt/Full_Cnt, 3 ),
+        
+        wS_per_avg = mean( wS_per, na.rm = TRUE),
+        wS_per_med = median( wS_per, na.rm = TRUE),
+        
+        .groups = "drop" )
+    
+    
+    break
+  }
+  break
+}
+
+
+if ( FALSE ) {
+  
+  all_screen_sums <- NULL
+  cgn_screen_sums <- NULL
+  
+  rm_outliers_vec <- c( TRUE, FALSE )
+  for ( rm_outliers in rm_outliers_vec ) {
+    outliers_str <- "rm-outliers"
+    if ( !rm_outliers ) outliers_str <- "ok-outliers"
+    
+    #
+    # Need to loop over dB_min_all_tib/dB_max_all_tib
+    #
+    pval_strs <- c("pval-0.05","pval-1.0")
+    for ( pval_str in pval_strs ) {
+      cur_data_tib <- dB_max_all_tib
+      if ( pval_str == "pval-0.05" ) cur_data_tib <- dB_min_all_tib
+      
+      param_key <- paste(outliers_str,pval_str, sep=".")
+      sel_path <- safe_mkdir( file.path(opt$out_path, "selection", outliers_str, pval_str) )
+      
+      # ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+      #
+      #                 Replicate Screening:: Full: Replicates
+      #
+      # ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+      
+      # A tibble: 301,819 × 6
+      rep1_all_screen_tib <- NULL
+      rep1_all_screen_tib <- cur_data_tib %>% 
+        dplyr::filter( Remove_Outliers ) %>%
+        # dplyr::filter( (Sam != "UM" & Sam != "UH" & Sam != "HM") ) %>%
+        dplyr::filter( (Sam != "U" & Grp != "H") ) %>%
+        dplyr::filter( (Sam != "U" & Grp != "M") ) %>%
+        dplyr::filter( (Sam != "H" & Grp != "M") ) %>%
+        dplyr::group_by( Probe_ID ) %>%
+        dplyr::summarise( 
+          Full_Cnt = n(),
+          Pass_Cnt = count( db_pas_per >  90 ),
+          Fail_Cnt = count( db_pas_per <= 90 ),
+          Pass_Per = base::round( 100 * Pass_Cnt/Full_Cnt, 3 ),
+          .groups = "drop" )
+      
+      # Better be zero below::
+      rep1_qc_cnt1 <- rep1_all_screen_tib %>% 
+        dplyr::filter( Pass_Cnt + Fail_Cnt != Full_Cnt ) %>% base::nrow()
+      
+      # [v0] ( 239371 + 27415 ) = 266786 / 301819 = 0.8839271
+      # [v1-all-0.05] ( 202567 + 24203 ) = 226770 / 301819 = 0.7513443
+      rep1_all_screen_sum <- NULL
+      rep1_all_screen_sum <- rep1_all_screen_tib %>% 
+        print_sum( vec = c("Pass_Per"), 
+                   vb=vb+3,vt=vt,tc=tc )
+      
+      all_screen_sums[[param_key]] <- rep1_all_screen_sum
+      
+      # [v0] ( 230716 + 26432 ) = 257148 / 283133 = 0.9082233
+      # [v1-cgn-0.05] ( 196558 + 23548 ) = 220106 / 283133 = 0.7773944
+      rep1_cgn_screen_sum <- NULL
+      rep1_cgn_screen_sum <- rep1_all_screen_tib %>% 
+        dplyr::mutate( Probe_Type = Probe_ID %>% stringr::str_sub(1,2) ) %>%
+        print_sum( vec = c("Probe_Type","Pass_Per"), 
+                   vb=vb+3,vt=vt,tc=tc )
+      
+      cgn_screen_sums[[param_key]] <- rep1_cgn_screen_sum
+      
+      # ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+      #
+      #                       Replicate Screening:: by Experiment
+      #
+      # ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+      
+      #
+      # Loop over experiments::
+      #
+      exp_vec <- cur_data_tib$Experiment %>% unique()
+      
+      #
+      # Summary::
+      #  - db_pas_per[0]
+      #  - db_pas_per[1]
+      #
+      for ( exp in exp_vec ) {
+        
+        
+        
+      }
+      
+      break
+    }
+    break
+  }
+}
+
+#
+# Summary Scratch Below::
+#
+if ( FALSE ) {
+  if ( FALSE ) {
+    if ( FALSE ) {
+      
+      # ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+      #
+      #                       Negative Control Screening::
+      #
+      # ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+      
+      if ( FALSE ) {
+        neg1_screen_tib <- NULL
+        neg1_screen_tib <- cur_data_tib %>% 
+          dplyr::filter( Remove_Outliers ) %>%
+          # dplyr::filter( (Sam != "UM" & Sam != "UH" & Sam != "HM") ) %>%
+          dplyr::filter( (Sam != "U" & Grp != "H") ) %>%
+          dplyr::filter( (Sam != "U" & Grp != "M") ) %>%
+          dplyr::filter( (Sam != "H" & Grp != "M") ) %>%
+          dplyr::group_by( Probe_ID ) %>%
+          dplyr::summarise( 
+            dB_max_med = median( dB_max, na.rm = TRUE ),
+            mP_med_med = median( mP_med, na.rm = TRUE ),
+            .groups = "drop" ) %>% 
+          dplyr::rename( Probe_Idx = Probe_ID ) %>% 
+          dplyr::mutate( Probe_Idx = Probe_Idx %>% as.integer() ) %>%
+          dplyr::inner_join( probe_map, by=c("Probe_Idx") ) %>%
+          dplyr::select( Probe_ID, dplyr::everything() ) %>%
+          dplyr::filter( Probe_ID %>% stringr::str_starts("ctl_Negative") )
+        
+        # A tibble: 1,956 × 4 [Including Titration]
+        # neg1_screen_tib
+        # A tibble: 4,259 × 4 [Excluding Titration]
+        # neg1_screen_tib
+        
+        # A tibble: 2,049 × 4 [Excluding Titration]
+        # neg1_screen_tib %>% dplyr::filter( dB_max_med > 0 & mP_med_med > 0 )
+        
+        # A tibble: 0 × 4
+        # neg1_screen_tib %>% dplyr::filter( mP_med_med == -Inf )
+        
+        # # A tibble: 4,259 × 4 [Excluding Titration]
+        neg1_screen_tib %>% dplyr::filter( dB_max_med > 0 | dB_max_med == -Inf )
+        
+        # Passing Negative Controls: 2325 / 4259 = 0.5459028
+        #
+        neg1_screen_den_gg1 <- neg1_screen_tib %>% 
+          dplyr::filter( dB_max_med > 0 ) %>% 
+          ggplot2::ggplot( aes(x=dB_max_med) ) + 
+          ggplot2::geom_density( alpha=0.2 )
+        
+        neg1_screen_den_gg2 <- neg1_screen_tib %>% 
+          dplyr::filter( dB_max_med > 0 & mP_med_med > 0 ) %>%
+          ggplot2::ggplot( aes(x=mP_med_med) ) + 
+          ggplot2::geom_density( alpha=0.2 )
+        
+        # A tibble: 2,045 × 1 [ Cell Lines: JL,KL,ML,RL ]
+        neg1_sel_screen_tib <- NULL
+        neg1_sel_screen_csv <- file.path( sel_path, "negative_controls.addresses.csv.gz")
+        neg1_sel_screen_tib <- neg1_screen_tib %>% 
+          dplyr::filter( dB_max_med > 0 & mP_med_med > 0 ) %>%
+          dplyr::inner_join( msa_man_tib, by=c("Probe_ID") ) %>%
+          dplyr::distinct( U ) %>%
+          dplyr::rename( Address = U ) # %>% dplyr::pull( Address )
+        readr::write_csv( x = neg1_sel_screen_tib, file = neg1_sel_screen_csv )
+      }
+      
+      
+      
+      # ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+      #
+      #                         Replicate Screening:: Max
+      #
+      # ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+      
+      # A tibble: 301,819 × 6
+      rep1_max_all_screen_tib <- NULL
+      rep1_max_all_screen_tib <- dB_max_all_tib %>% 
+        dplyr::filter( Remove_Outliers ) %>%
+        # dplyr::filter( (Sam != "UM" & Sam != "UH" & Sam != "HM") ) %>%
+        dplyr::filter( (Sam != "U" & Grp != "H") ) %>%
+        dplyr::filter( (Sam != "U" & Grp != "M") ) %>%
+        dplyr::filter( (Sam != "H" & Grp != "M") ) %>%
+        dplyr::group_by( Probe_ID ) %>%
+        dplyr::summarise( 
+          Full_Cnt = n(),
+          Pass_Cnt = count( db_pas_per >  90 ),
+          Fail_Cnt = count( db_pas_per <= 90 ),
+          Pass_Per = base::round( 100 * Pass_Cnt/Full_Cnt, 3 ),
+          .groups = "drop" )
+      
+      # Better be zero below::
+      rep1_qc_cnt1 <- rep1_max_all_screen_tib %>% 
+        dplyr::filter( Pass_Cnt + Fail_Cnt != Full_Cnt ) %>% base::nrow()
+      
+      # [v1-all-0.05] ( 239215 + 27574 ) = 266789 / 301819 = 0.8839371
+      rep1_max_all_screen_sum <- NULL
+      rep1_max_all_screen_sum <- rep1_max_all_screen_tib %>% 
+        print_sum( vec = c("Pass_Per"), 
+                   vb=vb+3,vt=vt,tc=tc )
+      
+      # [v1-cgn-0.05] ( 230559 + 26593 ) = 257152 / 283133 = 0.9082375
+      rep1_max_cgn_screen_sum <- NULL
+      rep1_max_cgn_screen_sum <- rep1_max_all_screen_tib %>% 
+        dplyr::mutate( Probe_Type = Probe_ID %>% stringr::str_sub(1,2) ) %>%
+        print_sum( vec = c("Probe_Type","Pass_Per"), 
+                   vb=vb+3,vt=vt,tc=tc )
+      
+      
+      # ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+      #
+      #                        Titration Screening::
+      #
+      # ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+      
+      uhm_screen_tib <- NULL
+      uhm_screen_tib <- exp_data_tab %>% 
+        dplyr::filter( Remove_Outliers ) %>%
+        # dplyr::filter( !(Sam != "UM" & Sam != "UH" & Sam != "HM") ) %>%
+        dplyr::filter( (Sam == "U" & Grp == "H") | (Sam == "U" & Grp == "M") | (Sam == "H" & Grp == "M") )
+      
+      uhm_screen_sum <- uhm_screen_tib %>% print_sum( vec = c("Sam","Grp","Con") )
+      
+      # Titration Screening:: All
+      #
+      uhmA_screen_tib <- NULL
+      uhmA_screen_tib <- uhm_screen_tib %>% 
+        dplyr::filter( is.na(Con) ) %>%
+        dplyr::group_by( Probe_ID ) %>%
+        dplyr::summarise( 
+          Full_Cnt = n(),
+          Pass_Cnt = count( db_pas_per >  90 ),
+          Fail_Cnt = count( db_pas_per <= 90 ),
+          Pass_Per = base::round( 100 * Pass_Cnt/Full_Cnt, 3 ),
+          .groups = "drop" ) %>% 
+        dplyr::rename( Probe_Idx = Probe_ID ) %>% 
+        dplyr::mutate( Probe_Idx = Probe_Idx %>% as.integer() ) %>%
+        dplyr::inner_join( probe_map, by=c("Probe_Idx") ) %>%
+        dplyr::select( Probe_ID, dplyr::everything() )
+      
+      # Better be zero below::
+      uhmA_qc_cnt1 <- uhmA_screen_tib %>% 
+        dplyr::filter( Pass_Cnt + Fail_Cnt != Full_Cnt ) %>% base::nrow()
+      
+      # [v0] ( 177787 + 91406 ) = 269193 / 301819 = 0.8919021
+      uhmA_screen_sum <- NULL
+      uhmA_screen_sum <- uhmA_screen_tib %>% 
+        print_sum( vec = c("Pass_Per"), 
+                   vb=vb+3,vt=vt,tc=tc )
+      
+      # [v0] [cg] ( 177777 + 91263 ) = 269040 / 283133 = 0.9502248
+      uhmA_screen_sum1 <- NULL
+      uhmA_screen_sum1 <- uhmA_screen_tib %>% 
+        dplyr::mutate( Probe_Type = Probe_ID %>% stringr::str_sub(1,2) ) %>%
+        print_sum( vec = c("Probe_Type","Pass_Per"), 
+                   vb=vb+3,vt=vt,tc=tc )
+      
+      # Titration Screening:: 50ng
+      #
+      uhm1_screen_tib <- NULL
+      uhm1_screen_tib <- uhm_screen_tib %>% 
+        dplyr::filter( !is.na(Con) ) %>%
+        dplyr::filter( Con == 50 ) %>%
+        dplyr::group_by( Probe_ID ) %>%
+        dplyr::summarise( 
+          Full_Cnt = n(),
+          Pass_Cnt = count( db_pas_per >  90 ),
+          Fail_Cnt = count( db_pas_per <= 90 ),
+          Pass_Per = base::round( 100 * Pass_Cnt/Full_Cnt, 3 ),
+          .groups = "drop" ) %>% 
+        dplyr::rename( Probe_Idx = Probe_ID ) %>% 
+        dplyr::mutate( Probe_Idx = Probe_Idx %>% as.integer() ) %>%
+        dplyr::inner_join( probe_map, by=c("Probe_Idx") ) %>%
+        dplyr::select( Probe_ID, dplyr::everything() )
+      
+      # Better be zero below::
+      uhm1_qc_cnt1 <- uhm1_screen_tib %>% 
+        dplyr::filter( Pass_Cnt + Fail_Cnt != Full_Cnt ) %>% base::nrow()
+      
+      # [v0] ( 187200 + 85157 ) = 272357 / 301819
+      uhm1_screen_sum <- NULL
+      uhm1_screen_sum <- uhm1_screen_tib %>% 
+        print_sum( vec = c("Pass_Per"), 
+                   vb=vb+3,vt=vt,tc=tc )
+      
+      # [v0] [cg] ( 187184 + 84790 ) = 271974 / 283133 = 0.9605874
+      uhm1_screen_sum1 <- NULL
+      uhm1_screen_sum1 <- uhm1_screen_tib %>% 
+        dplyr::mutate( Probe_Type = Probe_ID %>% stringr::str_sub(1,2) ) %>%
+        print_sum( vec = c("Probe_Type","Pass_Per"), 
+                   vb=vb+3,vt=vt,tc=tc )
+      
+      # Titration Screening:: 250ng
+      #
+      uhm2_screen_tib <- NULL
+      uhm2_screen_tib <- uhm_screen_tib %>% 
+        dplyr::filter( !is.na(Con) ) %>%
+        dplyr::filter( Con == 250 ) %>%
+        dplyr::group_by( Probe_ID ) %>%
+        dplyr::summarise( 
+          Full_Cnt = n(),
+          Pass_Cnt = count( db_pas_per >  90 ),
+          Fail_Cnt = count( db_pas_per <= 90 ),
+          Pass_Per = base::round( 100 * Pass_Cnt/Full_Cnt, 3 ),
+          .groups = "drop" ) %>% 
+        dplyr::rename( Probe_Idx = Probe_ID ) %>% 
+        dplyr::mutate( Probe_Idx = Probe_Idx %>% as.integer() ) %>%
+        dplyr::inner_join( probe_map, by=c("Probe_Idx") ) %>%
+        dplyr::select( Probe_ID, dplyr::everything() )
+      
+      # Better be zero below::
+      uhm2_qc_cnt1 <- uhm2_screen_tib %>% 
+        dplyr::filter( Pass_Cnt + Fail_Cnt != Full_Cnt ) %>% base::nrow()
+      
+      # [v0] ( 219361 + 55903 ) = 275264 / 301819
+      uhm2_screen_sum <- NULL
+      uhm2_screen_sum <- uhm2_screen_tib %>% 
+        print_sum( vec = c("Pass_Per"), 
+                   vb=vb+3,vt=vt,tc=tc )
+      
+      # [v0] [cg] ( 219341 + 55662 ) = 275003 / 283133 = 0.9712856
+      uhm2_screen_sum1 <- NULL
+      uhm2_screen_sum1 <- uhm2_screen_tib %>% 
+        dplyr::mutate( Probe_Type = Probe_ID %>% stringr::str_sub(1,2) ) %>%
+        print_sum( vec = c("Probe_Type","Pass_Per"), 
+                   vb=vb+3,vt=vt,tc=tc )
+      
+      # ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+      #
+      #                    Joint Replicate/Titration Screening::
+      #
+      # ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+      
+      allA_screen_tib <- NULL
+      allA_screen_tib <- dplyr::full_join( 
+        rep1_min_all_screen_tib %>% dplyr::distinct( Probe_ID, .keep_all = TRUE ),
+        uhm1_screen_tib %>% dplyr::distinct( Probe_ID, .keep_all = TRUE ), 
+        by=c("Probe_ID"),
+        suffix=c("_rep","_uhm") )
+      
+      # All: 239397 / 301815 = 0.7931912 [ Pass_Per_rep > 95 & Pass_Per_uhm > 60 ]
+      # All: 249185 / 301815 = 0.8256217 [ Pass_Per_rep > 95 & Pass_Per_uhm > 60 ]
+      #
+      # CpG: 167537 / 283133 = 0.5917254 [ Pass_Per_rep > 95 & Pass_Per_uhm > 99 ]
+      # CpG: 239297 / 283133 = 0.8451752 [ Pass_Per_rep > 95 & Pass_Per_uhm > 60 ]
+      # CpG: 249075 / 283133 = 0.8797102 [ Pass_Per_rep > 95 & Pass_Per_uhm > 60 ]
+      #
+      all1_screen_tib %>% 
+        dplyr::mutate( Probe_Type = Probe_ID %>% stringr::str_sub(1,2) ) %>%
+        dplyr::filter( Probe_Type == "cg" ) %>%
+        dplyr::filter( Pass_Per_rep > 95 & Pass_Per_uhm > 60 ) %>%
+        dplyr::group_by( Pass_Per_rep,Pass_Per_uhm ) %>% 
+        dplyr::summarise( Count=n(), .groups = "drop" )
+      
+      all1_sel95_screen_vec <- NULL
+      all1_sel95_screen_vec <- all1_screen_tib %>% 
+        dplyr::mutate( Probe_Type = Probe_ID %>% stringr::str_sub(1,2) ) %>%
+        # dplyr::filter( Probe_Type == "cg" ) %>%
+        dplyr::filter( (Probe_Type == "cg" & Pass_Per_rep > 95 & Pass_Per_uhm > 60 ) |
+                         Probe_Type != "cg" ) %>%
+        dplyr::pull( Probe_ID ) %>% as.vector()
+      
+      man1_screen_csv <- file.path( sel_path, "msa-v1.0_screened_manifest.v1.csv.gz" )
+      man1_screen_tib <- NULL
+      man1_screen_tib <- msa_man_tib %>% dplyr::filter( Probe_ID %in% all1_sel95_screen_vec )
+      readr::write_csv( x = man1_screen_tib, file = man1_screen_csv )
+      
+      # Jira = 782
+      
+      
+      
+      
+      
+      
+      #
+      # Basic Summaries::
+      #
+      exp_data_tab %>%
+        dplyr::mutate( dB_pas_class = as.integer(db_pas_per/10) ) %>%
+        dplyr::group_by( dB_pas_class ) %>%
+        dplyr::summarise( Count=n(), .groups = "drop" ) %>% print(n=1000)
+      
+      exp_data_tab %>%
+        dplyr::mutate( dB_pas_class = as.integer(db_pas_per/10) ) %>%
+        dplyr::group_by( dB_pas_class,Experiment ) %>%
+        dplyr::summarise( Count=n(), .groups = "drop" ) %>% print(n=1000)
+      
+      # 13757074 / 15090950
+      
+      # Try Filtering and viewing pass percent...
+      exp_data_tab %>% 
+        dplyr::filter( Remove_Outliers ) %>%
+        dplyr::filter( dB_pas_per > 75 )
+      
+      # Two variables wS and call rate. Color by wS and and split by experiment sam[1]
+      # - just group by last character of Sam...
+      
+      # [TBD]: Look at percent passing scores...
+      
+      # Grp = {L,M,A,H}
+      repL_den_wSper_dB_ggg <- NULL
+      repL_den_wSper_dB_ggg <- exp_data_tab %>%
+        dplyr::filter( (Sam != "UM" & Sam != "UH" & Sam != "HM") ) %>%
+        dplyr::mutate( dB_pas_class = as.integer(db_pas_per),
+                       Grp = Sam %>% stringr::str_sub(2,2),
+                       Sam = Sam %>% stringr::str_sub(1,1) ) %>%
+        dplyr::filter( Grp == "L" ) %>%
+        ggplot2::ggplot( aes(x=wS_per,
+                             # y=wS_per, 
+                             color = dB_pas_call,
+                             group = dB_pas_call) ) + 
+        ggplot2::geom_density( alpha=0.2 ) +
+        # ggplot2::facet_grid( rows = vars(Remove_Outliers,dB_pas_class, Con),
+        ggplot2::facet_grid( rows = vars(Remove_Outliers, Con),
+                             cols = vars(Grp,Sam) )
+      repL_den_wSper_dB_ggg
+      
+      uhm1_den_wSper_dB_ggg <- NULL
+      uhm1_den_wSper_dB_ggg <- exp_data_tab %>%
+        dplyr::filter( !(Sam != "UM" & Sam != "UH" & Sam != "HM") ) %>%
+        dplyr::mutate( dB_pas_class = as.integer(db_pas_per),
+                       Grp = Sam %>% stringr::str_sub(2,2),
+                       Sam = Sam %>% stringr::str_sub(1,1) ) %>%
+        dplyr::filter( Grp == "L" ) %>%
+        ggplot2::ggplot( aes(x=wS_per,
+                             # y=wS_per, 
+                             color = dB_pas_call,
+                             group = dB_pas_call) ) + 
+        ggplot2::geom_density( alpha=0.2 ) +
+        # ggplot2::facet_grid( rows = vars(Remove_Outliers,dB_pas_class, Con),
+        ggplot2::facet_grid( rows = vars(Remove_Outliers, Con),
+                             cols = vars(Grp,Sam) )
+      uhm1_den_wSper_dB_ggg
+      
+      
+      exp_data_sum <- NULL
+      exp_data_sum <- exp_data_tab %>% 
+        print_sum( vec = c("Experiment","Remove_Outliers","dB_pas_call"),
+                   vb=vb+2,vt=vt+1,tc=tc+1, tt=tt )
+      
+      
+      # Investigation::
+      # exp_split_ssh_tib %>% dplyr::filter( Sentrix_Name == "207675480016_R12C02" ) %>% dplyr::distinct() %>% as.data.frame()
+      
+      # [TBD]: Rename this to exp_data_tab to be consistent...
+      # [TBD]: Add this to above requriements...
+      # [TBD]: Reload/Reboot everyhing and start analysis over...
+      
+      exp_split_ssh_tib <- NULL
+      exp_split_ssh_tib <- auto_ssh_tab %>%
+        tidyr::separate( Experiment, into=c("Set","Sam","Con"), sep="_", 
+                         remove = FALSE, convert = TRUE ) 
+      
+      # Pass_Poob_Per
+      exp_auto_ssh_sum1 <- NULL
+      exp_auto_ssh_sum1 <- exp_split_ssh_tib %>%
+        dplyr::group_by( Set,
+                         Sam,
+                         Con,
+                         Experiment,
+                         Remove_Outliers ) %>%
+        dplyr::summarise(
+          
+          cr_cnt = n(),
+          cr_min = min(Pass_Poob_Per),
+          cr_avg = mean(Pass_Poob_Per),
+          cr_med = median(Pass_Poob_Per),
+          cr_sds = sd(Pass_Poob_Per),
+          cr_mad = mad(Pass_Poob_Per),
+          cr_max = max(Pass_Poob_Per),
+          
+          .groups = "drop" )
+      exp_auto_ssh_sum1 %>% print( n=base::nrow(exp_auto_ssh_sum1) )
+      
+      exp_auto_ssh_sum1 %>% 
+        dplyr::group_by( Experiment,Remove_Outliers ) %>%
+        summarise(
+          cr_min = min(cr_med, na.rm = TRUE ),
+          .groups = "drop" ) %>% 
+        dplyr::arrange( cr_min ) %>%
+        print( n=base::nrow(exp_auto_ssh_sum1) )
+      
+      exp_auto_ssh_sum2 <- NULL
+      exp_auto_ssh_sum2 <- auto_ssh_tab %>%
+        # dplyr::filter( Pass_Poob_Per > 85 ) %>%
+        dplyr::group_by( Experiment,Remove_Outliers ) %>%
+        dplyr::summarise(
+          
+          cr_cnt = n(),
+          cr_min = min(Pass_Poob_Per),
+          cr_avg = mean(Pass_Poob_Per),
+          cr_med = median(Pass_Poob_Per),
+          cr_sds = sd(Pass_Poob_Per),
+          cr_mad = mad(Pass_Poob_Per),
+          cr_max = max(Pass_Poob_Per),
+          
+          .groups = "drop" )
+      exp_auto_ssh_sum2 %>% print( n=base::nrow(exp_auto_ssh_sum2) )
+      
+      all_data_sum <- NULL
+      all_data_sum <- all_data_tab %>% 
+        print_sum( vec = c("Experiment","Remove_Outliers","dB_pas_call"),
+                   vb=vb+2,vt=vt+1,tc=tc+1, tt=tt )
+      
+      #
+      # [TBD]: Add extra plotting layer by sample types
+      # [TBD]: Write final calls
+      #        - Get Actual Names BACK ASAP!!!
+      # [TBD]: Reverse look up the filtered tango addresses
+      #
+      work_sdf %>% tibble::as_tibble()
+      all_data_tab %>% 
+        dplyr::filter( Experiment=="T1_UM" | Experiment=="T1_UM" | Experiment=="T1_HM" ) %>%
+        dplyr::group_by( Remove_Outliers,Experiment,Probe_ID ) %>% 
+        dplyr::summarise( Count=n(), 
+                          Pass_Count = count( dB_pas_call, na.rm = TRUE ),
+                          .groups = "drop" )
+      
+      # 276797 / 301819
+      #
+      # A tibble: 276,797 × 1
+      all_data_tab %>% 
+        dplyr::filter( Experiment=="T1_UM" | Experiment=="T1_UH" | Experiment=="T1_HM" ) %>%
+        dplyr::filter( dB_pas_call == TRUE ) %>% dplyr::distinct( Probe_ID )
+      
+      #
+      # Iterative Screening::
+      #
+      
+      # A tibble: 301,819 × 1
+      screen_tib <- NULL
+      screen_tib <- all_data_tab %>% dplyr::distinct( Probe_ID )
+      
+      # A tibble: 276,575 × 1 [  Remove_Outliers ]
+      # A tibble: 269,697 × 1 [ !Remove_Outliers ]
+      screen_tib <- screen_tib %>% 
+        dplyr::inner_join( 
+          all_data_tab %>% 
+            dplyr::filter( Remove_Outliers ) %>%
+            dplyr::filter( Experiment=="T1_UM" ) %>%
+            dplyr::filter( dB_pas_call == TRUE ) %>% 
+            dplyr::distinct( Probe_ID ),
+          by=c("Probe_ID") )
+      
+      if ( FALSE ) {
+        # A tibble: 234,335 × 1 [  Remove_Outliers ]
+        # A tibble: 229,919 × 1 [ !Remove_Outliers ]
+        screen_tib <- screen_tib %>% 
+          dplyr::inner_join( 
+            all_data_tab %>% 
+              dplyr::filter( Remove_Outliers ) %>%
+              dplyr::filter( Experiment=="T1_UH" ) %>%
+              dplyr::filter( dB_pas_call == TRUE ) %>% 
+              dplyr::distinct( Probe_ID ),
+            by=c("Probe_ID") )
+      }
+      
+      if ( FALSE ) {
+        # A tibble: 201,962 × 1 [  Remove_Outliers ]
+        # A tibble: 197,971 × 1 [ !Remove_Outliers ]
+        screen_tib <- screen_tib %>% 
+          dplyr::inner_join( 
+            all_data_tab %>% 
+              dplyr::filter( Remove_Outliers ) %>%
+              dplyr::filter( Experiment=="T1_HM" ) %>%
+              dplyr::filter( dB_pas_call == TRUE ) %>% 
+              dplyr::distinct( Probe_ID ),
+            by=c("Probe_ID") )
+      }
+      
+      # A tibble: 277,632 × 1 [  Remove_Outliers ]
+      # A tibble: 277,116 × 1 [ !Remove_Outliers ]
+      screen_tib <- screen_tib %>% 
+        dplyr::inner_join( 
+          all_data_tab %>% 
+            dplyr::filter( Remove_Outliers ) %>%
+            dplyr::filter( Experiment=="T1_HL_250" ) %>%
+            dplyr::filter( dB_pas_call == TRUE ) %>% 
+            dplyr::distinct( Probe_ID ),
+          by=c("Probe_ID") )
+      
+      # A tibble: 283,868 × 1 [  Remove_Outliers ]
+      # A tibble: 281,884 × 1 [ !Remove_Outliers ]
+      screen_tib <- screen_tib %>% 
+        dplyr::inner_join( 
+          all_data_tab %>% 
+            dplyr::filter( Remove_Outliers ) %>%
+            dplyr::filter( Experiment=="T1_JL_250" ) %>%
+            dplyr::filter( dB_pas_call == TRUE ) %>% 
+            dplyr::distinct( Probe_ID ),
+          by=c("Probe_ID") )
+      
+      # A tibble: 281,779 × 1 [  Remove_Outliers ]
+      # A tibble: 279,599 × 1 [ !Remove_Outliers ]
+      screen_tib <- screen_tib %>% 
+        dplyr::inner_join( 
+          all_data_tab %>% 
+            dplyr::filter( Remove_Outliers ) %>%
+            dplyr::filter( Experiment=="T1_RL_250" ) %>%
+            dplyr::filter( dB_pas_call == TRUE ) %>% 
+            dplyr::distinct( Probe_ID ),
+          by=c("Probe_ID") )
+      
+      # > all_data_tab$Experiment %>% unique()
+      # [1] "T1_HL_250"      "T1_HL_50"       "T1_HM"          "T1_JL_250"      "T1_JL_50"       "T1_KL_250"      "T1_KL_50"       "T1_ML_250"      "T1_ML_50"       "T1_NA11922_250" "T1_NA11922_50" 
+      # [12] "T1_NA12752_250" "T1_NA12752_50"  "T1_NA12877_250" "T1_NA12877_50"  "T1_NA12878_250" "T1_NA12878_50"  "T1_NA12882_250" "T1_NA12882_50"  "T1_NA1879_250"  "T1_NA1879_50"   "T1_RL_250"     
+      # [23] "T1_RL_50"       "T1_UH"          "T1_UM"      
+      
+      
+      den_pas_dB_ggg <- NULL
+      den_pas_dB_ggg <- all_data_tab %>% 
+        # dplyr::mutate( Group_Key = Experiment %>% stringr::str_sub(1,2) ) %>%
+        ggplot2::ggplot( aes(x=db_pas_per,
+                             # y=wS_per, 
+                             group = db_pas_per) ) + 
+        ggplot2::geom_density( alpha=0.2 ) +
+        ggplot2::facet_grid( rows = vars(Remove_Outliers), 
+                             cols = vars(Experiment) )
+      den_pas_dB_ggg
+      
+      box_pas_wS_ggg <- NULL
+      box_pas_wS_ggg <- exp_data_tab %>% 
+        ggplot2::ggplot( aes(x=db_pas_per,y=wS_per, group = db_pas_per) ) + 
+        ggplot2::geom_boxplot( varwidth = TRUE ) +
+        ggplot2::facet_grid( rows = vars(Remove_Outliers), 
+                             cols = vars(Experiment) )
+      box_pas_wS_ggg
+      
+      # auto_ssh_tab 
+      #
+      # [TBD]: Figure out how to add the size of each group to the plot
+      # [TBD]: Try using the weight aes...
+      if ( FALSE ) {
+        box_pas_wS_ggg2 <- NULL
+        box_pas_wS_ggg2 <- all_data_tab %>% 
+          ggplot2::ggplot( aes(x=db_pas_per,y=wS_per, group = db_pas_per) ) + 
+          ggplot2::geom_boxplot( outlier.alpha = 0.2, varwidth = TRUE ) +
+          # notch doesn't really do anything...
+          # notch = TRUE ) +
+          ggplot2::facet_grid( rows = vars(Remove_Outliers), 
+                               cols = vars(Experiment) )
+        
+        # This geom_text stuff doesn't work...
+        # ggplot2::geom_text(
+        #   stat = "db_pas_per" # aes(label = after_stat("db_pas_per") )
+        # )
+        box_pas_wS_ggg2
+      }
+      
+      uhm_box_pas_wS_ggg2 <- NULL
+      uhm_box_pas_wS_ggg2 <- exp_split_dat_tib %>% 
+        ggplot2::ggplot( aes(x=db_pas_per,y=wS_per, group = db_pas_per) ) + 
+        ggplot2::geom_boxplot( outlier.alpha = 0.2, varwidth = TRUE ) +
+        ggplot2::facet_grid( rows = vars(Remove_Outliers), 
+                             cols = vars(Set, Sam) )
+      
+      uhm_box_pas_wS_ggg2
+      
+    }
+  }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+if ( FALSE ) {
+  # ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+  #
+  #.                    Summarize and Plot Results::
+  #
+  # ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+  
+  rep_data_sum <- NULL
+  rep_data_sum <- rep_data_tib %>% 
+    print_sum( vec = c("Sample","Rm_Outliers"), vb=vb+3,vt=vt,tc=tc )
+  
+  if ( par$run_name == "EPICv1" ||
+       par$run_name == "COREv1" ||
+       par$run_name == "FAILv1" ) {
+    
+    # rep_data_tib %>% dplyr::filter( Probe_ID %in% epic_ses_dat$mask )
+    
+    epic_mask_tib <- NULL
+    epic_mask_tib <- tibble::tibble( Probe_ID = epic_ses_dat$mask, Masked = TRUE )
+    
+    rep_mask_tib <- NULL
+    rep_mask_tib <- rep_data_tib %>% 
+      dplyr::left_join( epic_mask_tib, by=c("Probe_ID") ) %>% 
+      dplyr::mutate(
+        Masked = dplyr::case_when(
+          is.na(Masked) ~ FALSE,
+          TRUE ~ TRUE )
+      )
+    
+    rep_mask_sum <- NULL
+    rep_mask_sum <- rep_mask_tib %>% 
+      dplyr::group_by( Masked ) %>% 
+      dplyr::summarise( Count=n(), .groups = "drop" )
+    
+    # Quick Validation::
+    #
+    # rep_mask_tib %>% 
+    #   dplyr::group_by( Masked ) %>% 
+    #   dplyr::summarise( Count=n(), .groups = "drop" )
+    
+    sn <- 0.000001
+    
+    # Apply Cutoffs/Log
+    rep_den_mask_gg <- NULL
+    rep_den_mask_gg <- rep_mask_tib %>% 
+      dplyr::filter( fin_scr >= 0.9 ) %>%
+      # ggplot2::ggplot( aes( x=fin_scr, color = Sample, fill = Sample ) ) +
+      ggplot2::ggplot( aes( x=log(fin_scr) + sn, color = Sample, fill = Sample ) ) +
+      ggplot2::geom_density( alpha = 0.2 )  +
+      ggplot2::facet_grid( rows = vars(Masked) )
+    
+    # Conclusion:: Score does show a difference for Replicate score vs. third
+    #  party analysis...
+    #
+    rep_den_mask_pdf <- file.path( opt$out_path, paste(opt$run_name,"rep_den_mask.pdf", sep=".") )
+    rep_den_mask_gg <- NULL
+    rep_den_mask_gg <- rep_mask_tib %>% 
+      dplyr::filter( fin_scr >= 0.9 ) %>%
+      ggplot2::ggplot( aes( x=fin_scr, color = Sample, fill = Sample ) ) +
+      # ggplot2::ggplot( aes( x=log(fin_scr) + sn, color = Sample, fill = Sample ) ) +
+      ggplot2::geom_density( alpha = 0.2 )  +
+      ggplot2::facet_grid( rows = vars(Masked),
+                           cols = vars(Sample) )
+    ggplot2::ggsave( filename = rep_den_mask_pdf, 
+                     device = "pdf", width = 7, height = 7, dpi = 320 )
+    
+  } else {
+    
+    # Looks good::
+    rep_den_pdf <- file.path( opt$out_path, paste(opt$run_name,"rep_density.pdf", sep=".") )
+    rep_den_gg <- NULL
+    rep_den_gg <- rep_data_tib %>% 
+      ggplot2::ggplot( aes( x=fin_scr, color = Sample, fill = Sample ) ) +
+      ggplot2::geom_density( alpha = 0.2 ) +
+      ggplot2::facet_grid( cols = vars(Sample),
+                           rows = vars(Rm_Outliers) )
+    
+    ggplot2::ggsave( filename = rep_den_pdf, 
+                     device = "pdf", 
+                     width = 7, 
+                     height = 7, 
+                     dpi = 320 )
+    
+    #
+    # Plot Negative w/w0 Outlier Removal
+    #
+    negs_sdf_ggg <- negs_sdf_tab %>% 
+      ggplot2::ggplot( aes(x=UG, fill=Rm_Outliers) ) + 
+      ggplot2::geom_density( alpha=0.2 ) +
+      ggplot2::facet_grid( cols = vars(Sample),
+                           rows = vars(Rm_Outliers) )
+    
+    # More or less worthless::
+    rep_2den_gg <- NULL
+    rep_2den_gg <- rep_data_tib %>% 
+      ggplot2::ggplot( aes( x=fin_scr, y=med_dbs ) ) +
+      ggplot2::geom_density2d() +
+      ggplot2::facet_grid( rows = vars(Sample) )
+    
+  }
+}
+
+# ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+#                                Finished::
+# ----- ----- ----- ----- ----- -----|----- ----- ----- ----- ----- ----- #
+
+prgm_ret_val <- 
+  program_done(opts=opt, pars=par, vb=opt$verbose, tt=tt)
+
+sysTime <- Sys.time()
+cat(glue::glue("{pmssg} Finished(time={sysTime}); Success={success}.{RET2}"))
+
+# End of file
