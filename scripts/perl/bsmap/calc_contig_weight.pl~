@@ -1,0 +1,285 @@
+#! /usr/bin/perl
+
+use strict;
+use Getopt::Long;
+
+use constant SEQ_ID                              => 0;
+use constant FORWARD_SEQUENCE                    => 1;
+use constant GENOME_BUILD                        => 2;
+use constant CHROMOSOME                          => 3;
+use constant COORDINATE                          => 4;
+use constant DESIGN_STATE                        => 5;
+use constant SEQ_LENGTH                          => 6;
+use constant FORWARD_CPG_COORD                   => 7;
+use constant TB_STRAND                           => 8;
+use constant TOP_SEQUENCE                        => 9;
+use constant TOP_CPG_COORD                       => 10;
+use constant PROBE_TYPE                          => 11;
+use constant PROBESET_ID                         => 12;
+use constant PROBESET_SCORE                      => 13;
+use constant METHYL_PROBE_ID                     => 14;
+use constant METHYL_PROBE_SEQUENCE               => 15;
+use constant METHYL_PROBE_LENGTH                 => 16;
+use constant METHYL_START_COORD                  => 17;
+use constant METHYL_END_COORD                    => 18;
+use constant METHYL_PROBE_COVERED_TOP_SEQUENCE   => 19;
+use constant METHYL_ALLELE_FR_STRAND             => 20;
+use constant METHYL_ALLELE_TB_STRAND             => 21;
+use constant METHYL_ALLELE_CO_STRAND             => 22;
+use constant METHYL_ALLELE_TYPE                  => 23;
+use constant METHYL_FINAL_SCORE                  => 24;
+use constant METHYL_TM                           => 25;
+use constant METHYL_TM_SCORE                     => 26;
+use constant METHYL_GC_PERCENT                   => 27;
+use constant METHYL_GC_SCORE                     => 28;
+use constant METHYL_13MER_COUNT                  => 29;
+use constant METHYL_13MER_SCORE                  => 30;
+use constant METHYL_ADDRESS_COUNT                => 31;
+use constant METHYL_ADDRESS_SCORE                => 32;
+use constant METHYL_SELF_COMPLEMENTARITY         => 33;
+use constant METHYL_SELF_COMPLEMENTARITY_SCORE   => 34;
+use constant METHYL_MONO_RUN                     => 35;
+use constant METHYL_MONO_RUN_SCORE               => 36;
+use constant METHYL_ECTOPIC_COUNT                => 37;
+use constant METHYL_ECTOPIC_SCORE                => 38;
+use constant METHYL_UNDERLYING_CPG_COUNT         => 39;
+use constant METHYL_UNDERLYING_CPG_MIN_DIST      => 40;
+use constant METHYL_UNDERLYING_CPG_SCORE         => 41;
+use constant METHYL_IN_CPG_ISLAND_RELAXED        => 42;
+use constant METHYL_CPG_ISLAND_SCORE             => 43;
+use constant METHYL_NEXT_BASE                    => 44;
+use constant METHYL_NEXT_BASE_SCORE              => 45;
+use constant UNMETHYL_PROBE_ID                   => 46;
+use constant UNMETHYL_PROBE_SEQUENCE             => 47;
+use constant UNMETHYL_PROBE_LENGTH               => 48;
+use constant UNMETHYL_START_COORD                => 49;
+use constant UNMETHYL_END_COORD                  => 50;
+use constant UNMETHYL_PROBE_COVERED_TOP_SEQUENCE => 51;
+use constant UNMETHYL_ALLELE_FR_STRAND           => 52;
+use constant UNMETHYL_ALLELE_TB_STRAND           => 53;
+use constant UNMETHYL_ALLELE_CO_STRAND           => 54;
+use constant UNMETHYL_ALLELE_TYPE                => 55;
+use constant UNMETHYL_FINAL_SCORE                => 56;
+use constant UNMETHYL_TM                         => 57;
+use constant UNMETHYL_TM_SCORE                   => 58;
+use constant UNMETHYL_GC_PERCENT                 => 59;
+use constant UNMETHYL_GC_SCORE                   => 60;
+use constant UNMETHYL_13MER_COUNT                => 61;
+use constant UNMETHYL_13MER_SCORE                => 62;
+use constant UNMETHYL_ADDRESS_COUNT              => 63;
+use constant UNMETHYL_ADDRESS_SCORE              => 64;
+use constant UNMETHYL_SELF_COMPLEMENTARITY       => 65;
+use constant UNMETHYL_SELF_COMPLEMENTARITY_SCORE => 66;
+use constant UNMETHYL_MONO_RUN                   => 67;
+use constant UNMETHYL_MONO_RUN_SCORE             => 68;
+use constant UNMETHYL_ECTOPIC_COUNT              => 69;
+use constant UNMETHYL_ECTOPIC_SCORE              => 70;
+use constant UNMETHYL_UNDERLYING_CPG_COUNT       => 71;
+use constant UNMETHYL_UNDERLYING_CPG_MIN_DIST    => 72;
+use constant UNMETHYL_UNDERLYING_CPG_SCORE       => 73;
+use constant UNMETHYL_IN_CPG_ISLAND_RELAXED      => 74;
+use constant UNMETHYL_CPG_ISLAND_SCORE           => 75;
+use constant UNMETHYL_NEXT_BASE                  => 76;
+use constant UNMETHYL_NEXT_BASE_SCORE            => 77;
+
+my $faiFile;
+my $bspFile;
+
+my $cpgMax = 0;
+my $chrMax = 0;
+
+my $verbose = 0;
+
+my %fai = ();
+
+GetOptions("b|bsp=s"   => \$bspFile,
+	   "f|fai=s"   => \$faiFile,
+
+	   "cpgMax=i"  => \$cpgMax,
+	   "chrMax=i"  => \$chrMax,
+
+	   "v|verbose=i" => \$verbose,
+	   );
+
+if (! defined($bspFile) || ! defined($faiFile)  ) {
+    print STDERR "[Usage]: $0 -f|fai faiFile -b|bsp bspFile [ chrMax int ] [ -cpgMax cpgMax] [options]\n";
+    print STDERR "[Usage]: Missing argument! Exiting...\n";
+    exit(1);
+}
+
+if ( $faiFile =~ m/\.gz$/ ) {
+
+    open(IN, "gzip -dc $faiFile |") or die "gzip -dc $faiFile: $!";
+    
+} else {
+    open(IN, "<$faiFile")
+	or die("Failed to open $faiFile for reading: $!");
+}
+my $faiCnt = 0;
+while(<IN>) {
+    s/^\s+//;
+    s/\s+$//;
+
+    my $line = $_;
+    my @data = split(/\t/, $line);
+    
+    my $chr = shift( @data );
+
+    die("[ERROR]: Chr='$chr' already defined! @fai{$chr} vs. $line\n") if ( defined($fai{$chr}) );
+
+    $fai{$chr} = [ @data ];
+
+    $faiCnt++;
+    last if ($chrMax != 0 && $faiCnt >= $chrMax);
+}
+close(IN);
+print STDERR "\# Loaded " . scalar(keys %fai) . " total target chromosomes and lengths!\n"
+    if ( $verbose > 0 );
+
+#
+# Process BSMAP::
+#
+if ( $bspFile =~ m/\.gz$/ ) {
+
+    open(IN, "gzip -dc $bspFile |") or die "gzip -dc $bspFile: $!";
+    
+} else {
+    open(IN, "<$bspFile")
+	or die("Failed to open $bspFile for reading: $!");
+}
+my $maxLen;
+my $sumLen;
+
+my $curCpg;
+
+my $maxTag;
+my $maxChr;
+my $maxPos;
+my $maxSrd;
+
+my $datCnt = 0;
+my $cpgCnt = 0;
+my $hitCnt = 0;
+
+my %chrCnts = ();
+
+#
+# TBD::
+#  1. Status Bar
+#  2. Error Checking
+#     - No redundant cgn in BSP
+#  3. *** Multi Contig Mapping ***
+#  4. Optimization
+#     - fai{chr} = len
+#  5. Summary Output
+#  6. Final Format
+#     - Sorted/Bgzipped/Tabix Output
+#
+#
+while(<IN>) {
+    s/^\s+//;
+    s/\s+$//;
+
+    my $line = $_;
+    my @data = split(/\t/, $line);
+
+    my $cpg = $data[0];
+    my $tag = $data[3];
+    my $chr = $data[4];
+    my $pos = $data[5];
+    my $srd = $data[6];
+
+    next if ( $tag eq "UM");
+
+    die("[ERROR]: Failed to find Chr='$chr'\n") if ( ! defined($fai{$chr}) );
+    
+    my $len = $fai{$chr}[0];
+
+    # Initialize
+    if ( !defined($curCpg) ) {
+	$maxLen = 0;
+	$sumLen = 0;
+
+	$curCpg = $cpg;
+	$maxTag = $tag;
+	$maxChr = $chr;
+	$maxPos = $pos;
+	$maxSrd = $srd;
+	$hitCnt = 0;
+
+	%chrCnts = ();
+
+	$cpgCnt++;
+    } elsif ( $curCpg ne $cpg ) {
+	die("[ERROR]: maxLen == 0\n") if ( !defined($maxLen) || $maxLen == 0 );
+	die("[ERROR]: sumLen == 0\n") if ( !defined($sumLen) || $sumLen == 0 );
+	
+	# Calc contig weight
+	my $conw = $maxLen / $sumLen;
+	my $chrCnt = sclar( keys %chrCnts );
+	
+	# Write bed output:: VERBOSE
+	print STDERR "$maxChr\t$maxPos\t$maxPos\t$curCpg\t$conw\t$maxSrd\t$maxTag\t" .
+	    "$chrCnts{$maxChr}\t$hitCnt\t$chrCnt\t$maxLen\t$sumLen\n" if ( $verbose > 1 );
+	print STDERR "----- " x 10 . "\n" if ( $verbose > 1 );
+
+	# Write bed output::
+	print "$maxChr\t$maxPos\t$maxPos\t$curCpg\t$conw\t$maxSrd\t$maxTag\t" .
+	    "$chrCnts{$maxChr}\t$hitCnt\t$chrCnt\t$maxLen\t$sumLen\n" if ( $verbose > 1 );
+
+	# Reset
+	$maxLen = 0;
+	$sumLen = 0;
+
+
+	$curCpg = $cpg;
+	$maxTag = $tag;
+	$maxChr = $chr;
+	$maxPos = $pos;
+	$maxSrd = $srd;
+	$hitCnt = 0;
+
+	%chrCnts = ();
+
+	$cpgCnt++;
+    } else {
+	# die("\n[ERROR]: Not sure how we got here: Line[$datCnt]: '$line'\n");
+    }
+
+    # VERBOSE::
+    print STDERR "$cpg\t$tag\t$chr\t$pos\t$srd\n" if ( $verbose > 1 );
+
+    #
+    # Sum current stats::
+    #  - sumLen can be done for every hit [least desirable]
+    #  - sumLen can be only summed for new contigs [desirable]
+    
+    # $sumLen += $len; # [least desirable]
+    $sumLen += $len if ( !defined($chrCnts{$chr}) ); # [desirable]
+    $hitCnt++;
+    $chrCnts{$chr}++;
+
+    if ( $len > $maxLen ) {
+	$maxLen = $len;
+
+	$maxTag = $tag;
+	$maxChr = $chr;
+	$maxPos = $pos;
+	$maxSrd = $srd;
+    }
+
+    # TBD:: Could add extra BSPMAP integrity checks here...
+
+    # TBD:: Could add status update verbose output here...
+    $datCnt++;
+    # last if ($cpgMax != 0 && $datCnt >= $cpgMax);
+
+    last if ($cpgMax != 0 && $cpgCnt >= $cpgMax);
+}
+close(IN);
+print STDERR "\# Loaded " . $cpgCnt . " total target CGs!\n"
+     if ( $verbose > 0 );
+
+print STDERR "\# Done!\n" if ( $verbose > 0 );
+
+## End of file
