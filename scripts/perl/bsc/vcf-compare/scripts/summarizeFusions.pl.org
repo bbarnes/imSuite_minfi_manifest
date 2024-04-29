@@ -1,0 +1,175 @@
+#! /usr/bin/perl -w
+
+use strict;
+use Getopt::Long;
+
+use constant FALSE => 0;
+use constant TRUE  => 1;
+
+## Bed file formats
+use constant BED_CHR   => 0;
+use constant BED_START => 1;
+use constant BED_END   => 2;
+use constant BED_ID    => 3;
+use constant BED_IDX   => 4;
+use constant BED_SIDE  => 5;
+use constant BED_INFO  => 6;
+
+my @mapDat  = ();
+my @infoDat = ();
+my @results = ();
+
+my $numElements;
+my $sampleName = "NA";
+
+GetOptions("n=i"  => \$numElements,
+	   "s=s"  => \$sampleName,
+	   );
+
+if (! defined($numElements) || ! defined($sampleName)) {
+    print STDERR "[Usage]: $0 -n numberElements -s sampleName [options]\n";
+    print STDERR "[Usage]: Missing arguments! Exiting...\n";
+    exit(1);
+}
+
+my %lineHash1 = ();
+my %lineHash2 = ();
+my $lineCnt = 0;
+while(<STDIN>) {
+    s/^\s+//;
+    s/\s+$//;
+    next if /^\#/;
+
+    my $line = $_;
+    my @fields = split(/\t/, $line);
+
+    #print "LINE: $line\n";
+
+    my @idxes = split(/,/, $fields[BED_IDX]);
+    my @sides = split(/,/, $fields[BED_SIDE]);
+    my @infos = split(/@@/, $fields[BED_INFO]);
+
+    for (my $ii = 0; $ii < @idxes; $ii++) {
+	my $idx  = $idxes[$ii];
+	my $side = $sides[$ii];
+
+	next if ($idx eq "-");
+
+	#print STDERR "(ii/idx): $ii, $idx\n";
+	#print STDERR "LINE2: $line\n";
+
+	## Sanity check
+	#die("[ERROR]: [Line: $lineCnt]: Failed to match info ($ii), line: $line\n\t'$infoDat[$ii][$idx]'\n\t'$infos[$ii]'\n" .
+	#    "\tHASH1\t" . $lineHash1{"$ii.$idx.$side"} . "\nHASH2\t" . $lineHash2{"$ii.$idx"} . "\n" )
+	#    if (defined($infoDat[$ii][$idx]) && $infoDat[$ii][$idx] ne $infos[$ii]);
+
+	#die("[ERROR]: [Line: $lineCnt]: Mapping already exists: $ii, $idx, $side: @{$mapDat[$ii][$idx][$side]}!\nOn line: '$line'\n" .
+	#    "$infos[$ii]\n$infoDat[$ii][$idx]\n" . "\tHASH1\t" . $lineHash1{"$ii.$idx.$side"} . "\n\tHASH2\t" . $lineHash2{"$ii.$idx"} . "\n")
+	#    if (defined($mapDat[$ii][$idx][$side]));
+
+	$infoDat[$ii][$idx] = $infos[$ii];
+	#print STDERR "$ii\t$idx\t$infoDat[$ii][$idx]\n";
+
+	$lineHash1{"$ii.$idx.$side"} = $line;
+	$lineHash2{"$ii.$idx"} = $line;
+
+	$mapDat[$ii][$idx][$side] = [ $fields[BED_IDX], $fields[BED_SIDE] ];
+    }
+    #print "-" x 100 . "\n";
+    $lineCnt++;
+}
+
+my %summary = ();
+my $blankStr = "-," x $numElements;
+$blankStr =~ s/,+$//;
+for (my $ii = 0; $ii < @mapDat; $ii++) {
+    if (! defined($mapDat[$ii])) {
+	print STDERR "[Warning]: Failed to find ii index for $ii!\n";
+	next;
+    }
+    for (my $idx = 0; $idx < @{$mapDat[$ii]}; $idx++) {
+	if (! defined($mapDat[$ii][$idx][0]) &&
+	    ! defined($mapDat[$ii][$idx][1])) {
+	    print STDERR "[Warning]: Failed to find both sides for $ii, $idx!";
+	    next;
+	    #die("[ERROR]: Failed to find both sides for $ii, $idx!");
+	}
+
+	my @idxesA = split(/,/, $blankStr);
+	my @sidesA = split(/,/, $blankStr);
+
+	my @idxesB = split(/,/, $blankStr);
+	my @sidesB = split(/,/, $blankStr);
+	
+	if (defined($mapDat[$ii][$idx][0])) {
+	    #print STDERR "[ERROR]: No data for $ii, $idx, 0\n";
+	    #next;
+	    @idxesA = split(/,/, $mapDat[$ii][$idx][0][0]);
+	    @sidesA = split(/,/, $mapDat[$ii][$idx][0][1]);
+	}
+	if (defined($mapDat[$ii][$idx][1])) {
+	    @idxesB = split(/,/, $mapDat[$ii][$idx][1][0]);
+	    @sidesB = split(/,/, $mapDat[$ii][$idx][1][1]);
+	}
+
+	my $passing = TRUE;
+	my $matCnt  = 0;
+	my %keys = ();
+	for (my $jj = 0; $jj < @idxesA; $jj++) {
+	    if ($idxesA[$jj] eq $idxesB[$jj] && $sidesA[$jj] ne $sidesB[$jj]) {
+		$keys{$jj} = 1;
+		$matCnt++;
+	    } else {
+		$passing = FALSE;
+	    }
+	}
+
+	my $matKey = "";
+	foreach my $key (sort {$a <=> $b} keys %keys) {
+	    $matKey .= "$key,";
+	}
+	#print "$matKey\n";
+	$matKey =~ s/,+$//;
+	if (! defined($summary{$matKey})) {
+	    $summary{$matKey} = 1;
+	} else {
+	    $summary{$matKey}++;
+	}
+	
+	#if ($matCnt == 3) {
+	if ($matCnt >= 0) {
+	    print STDERR "HIT\t$sampleName\t$matKey\t";
+	    for (my $jj = 0; $jj < @idxesA; $jj++) {
+		if (! defined($infoDat[$jj]) || ! defined($idxesA[$jj]) || $idxesA[$jj] eq "-" || ! defined($infoDat[$jj][$idxesA[$jj]])) {
+		    print STDERR "-\t";
+		} else {
+		    print STDERR "$infoDat[$jj][$idxesA[$jj]]\t";
+		}
+		#print STDERR "\n";
+		#if (defined($lineHash2{"$jj.$idxesA[$jj]"})) {
+		#    print STDERR "LINE ($jj): " . $lineHash2{"$jj.$idxesA[$jj]"} . "\n";
+		#}
+	    }
+	    print STDERR "\n";
+	}
+
+	if ($passing) {
+	    #print "HERE: $ii, $idx, @idxesA, @sidesA, @idxesB, @sidesB\n";
+	    #print "$infoDat[$ii][$idx]\n";
+	} else {
+	    #print "FAIL: $ii, $idx, @idxesA, @sidesA, @idxesB, @sidesB\n";
+	}
+    }
+}
+
+#print STDERR "\# Done! Size, mapDat: " . @mapDat . "\n";
+
+##
+## We currently don't believe these stats
+##
+
+#foreach my $key (sort keys %summary) {
+#    print "$key\t$summary{$key}\n";
+#}
+
+## End of file

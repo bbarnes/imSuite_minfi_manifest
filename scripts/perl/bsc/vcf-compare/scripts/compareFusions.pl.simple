@@ -1,0 +1,203 @@
+#! /usr/bin/perl -w
+
+use strict;
+use Getopt::Long;
+
+## Intersection format
+use constant CHRA    => 0;
+use constant STARTA  => 1;
+use constant ENDA    => 2;
+use constant IDA     => 3;
+use constant IDXA    => 4;
+use constant SIDEA   => 5;
+use constant INFOA   => 6;
+
+use constant CHRB    => 7;
+use constant STARTB  => 8;
+use constant ENDB    => 9;
+use constant IDB     => 10;
+use constant IDXB    => 11;
+use constant SIDEB   => 12;
+use constant INFOB   => 13;
+
+## Bed file formats
+use constant BED_CHR   => 0;
+use constant BED_START => 1;
+use constant BED_END   => 2;
+use constant BED_ID    => 3;
+use constant BED_IDX   => 4;
+use constant BED_SIDE  => 5;
+use constant BED_INFO  => 6;
+
+my $intFile;
+my $bedFile1;
+my $bedFile2;
+my $numElements;
+
+GetOptions("i=s"  => \$intFile,
+	   "1=s"  => \$bedFile1,
+	   "2=s"  => \$bedFile2,
+	   "n=i"  => \$numElements,
+	   );
+
+if (! defined($intFile) || ! defined($bedFile1) || ! defined($bedFile2) || ! defined($numElements)) {
+    print STDERR "[Usage]: $0 -i intersectionFile -1 bedFile1 -2 bedFile2 -n numElements [options]\n";
+    print STDERR "[Usage]: Missing arguments! Exiting...\n";
+    exit(1);
+}
+
+## Load bed files
+my @bedDat1 = loadBed($bedFile1);
+my @bedDat2 = loadBed($bedFile2);
+
+open(INT, "<$intFile")
+    or die("Failed to open $intFile for reading: $!");
+
+my %mapA = ();
+my %mapB = ();
+my $lineCnt = 0;
+while(<INT>) {
+    s/^\s+//;
+    s/\s+$//;
+    next if /^\#/;
+
+    my $line = $_;
+    my @fields = split(/\t/, $line);
+
+    my $idA    = $fields[IDA];
+    my $idB    = $fields[IDB];
+    my $idxA   = $fields[IDXA];
+    my $idxB   = $fields[IDXB];
+    my $sideA  = $fields[SIDEA];
+    my $sideB  = $fields[SIDEB];
+    my $startA = $fields[STARTA];
+    my $startB = $fields[STARTB];
+    my $endA   = $fields[ENDA];
+    my $endB   = $fields[ENDB];
+
+    my $min = $startA;
+    $min = $startB if ($startB < $min);
+
+    my $max = $endA;
+    $max = $endB if ($endB > $max);
+
+    my $keyA = "$idxA,$sideA";
+    my $keyB = "$idxB,$sideB";
+
+    #die("[ERROR]: $lineCnt: Map A: $keyA already defined: $line!\n" . 
+    #"\t@{$mapA{$keyA}}\n")
+    #if (defined($mapA{$keyA}));
+    #die("[ERROR]: Map B: $keyB already defined: $line!\n" .
+    #"\t@{$mapA{$keyA}}\n")
+    #if (defined($mapB{$keyB}));
+
+    $mapA{$keyA} = [ $idxB, $sideA, $sideB, $min, $max, $idB ];
+    $mapB{$keyB} = [ $idxA, $sideA, $sideB, $min, $max, $idA ];
+
+    #print STDERR "$idxA,$idxB\n";
+    $lineCnt++;
+}
+close(INT);
+
+#print STDERR "\# Mapped " . scalar(keys %mapA) . " intersections!\n";
+
+my $newId = 0;
+my $skipStr = "-," x ($numElements - 1);
+$skipStr =~ s/,$//;
+my $skipStr2 = "-\@\@" x ($numElements - 1);
+$skipStr2 =~ s/\@+$//;
+
+for (my $ii = 0; $ii < @bedDat1; $ii++) {
+    my $idx = "$bedDat1[$ii][BED_IDX],$bedDat1[$ii][BED_SIDE]";
+
+    #print STDERR "SIZE: ($ii); " . @bedDat2 . "\n";
+
+    if (defined($mapA{$idx})) {
+	my @mapDat = @{$mapA{$idx}};
+	#my $newIdx = "$bedDat1[$ii][BED_IDX],$bedDat2[$mapDat[0]][BED_IDX]";
+	my $newIdx  = "$bedDat1[$ii][BED_IDX],$mapDat[0]";
+	my $mateIdx = $mapDat[5];
+	my $bed2Info = $bedDat2[$mateIdx][BED_INFO];
+
+	#print STDERR "$mateIdx,$bed2Info\n";
+	#print STDERR "HERE: @mapDat\n\n";
+	if (! defined($bedDat2[$mateIdx][BED_INFO])) {
+	    
+	}
+	print "$bedDat1[$ii][BED_CHR]\t$mapDat[3]\t$mapDat[4]\t$newId\t$newIdx\t$mapDat[1],$mapDat[2]\t$bedDat1[$ii][BED_INFO]\@\@";
+	print "$bed2Info\n";
+	#"$bedDat2[$mateIdx][BED_INFO]\n";
+    } else {
+	my $newIdx = "$bedDat1[$ii][BED_IDX],-";
+	print "$bedDat1[$ii][BED_CHR]\t$bedDat1[$ii][BED_START]\t$bedDat1[$ii][BED_END]\t" .
+	    "$newId\t$newIdx\t$bedDat1[$ii][BED_SIDE],-\t$bedDat1[$ii][BED_INFO]\@\@-\n";
+    }
+    #print STDERR "SIZE: ($ii); " . @bedDat2 . "\n";
+    $newId++;
+}
+
+##
+## Now just print out all the non matching bed 2 calls
+##
+for (my $ii = 0; $ii < @bedDat2; $ii++) {
+    my $idx = "$bedDat2[$ii][BED_IDX],$bedDat2[$ii][BED_SIDE]";
+    #print STDERR "IDX: $ii, '$idx', " . @bedDat2 . "\n\t@{$bedDat2[$ii]}\n";
+
+    if (defined($mapB{$idx})) {
+	## Here we actually do nothing becuase its already been merged.
+	my @mapDat = @{$mapB{$idx}};
+	#my $newIdx  = "$bedDat2[$ii][BED_IDX],$mapDat[0]";
+	my $newIdx  = "$mapDat[0],$bedDat2[$ii][BED_IDX]";
+	my $mateIdx = $mapDat[5];
+	my $bed2Info = $bedDat1[$mateIdx][BED_INFO];
+
+	if (! defined($bedDat1[$mateIdx][BED_INFO])) {
+	}
+	## Swapped
+	print "$bedDat2[$ii][BED_CHR]\t$mapDat[3]\t$mapDat[4]\t$newId\t$newIdx\t$mapDat[1],$mapDat[2]\t$bed2Info\@\@";
+	print "$bedDat2[$ii][BED_INFO]\n";
+
+	#print "$bedDat2[$ii][BED_CHR]\t$mapDat[3]\t$mapDat[4]\t$newId\t$newIdx\t$mapDat[1],$mapDat[2]\t$bedDat2[$ii][BED_INFO]\@\@";
+	#print "$bed2Info\n";
+	## OLD CODE
+	#my @mapDat = @{$mapB{$idx}};
+	#my $newIdx = "$bedDat1[$ii][BED_IDX],$bedDat2[$mapDat[0]][BED_IDX]";
+	#print "HERE$bedDat2[$ii][BED_CHR]\t$mapDat[3]\t$mapDat[4]\t$newId\t$newIdx\t$mapDat[1],$mapDat[2]\t$bedDat2[$ii][BED_INFO]\@\@" .
+	#    "$bedDat2[$mapDat[0]][BED_INFO]\n";
+    } else {
+	my $newIdx = "$skipStr,$bedDat2[$ii][BED_IDX]";
+
+	print "$bedDat2[$ii][BED_CHR]\t$bedDat2[$ii][BED_START]\t$bedDat2[$ii][BED_END]\t" .
+	    "$newId\t$newIdx\t$skipStr,$bedDat2[$ii][BED_SIDE]\t$skipStr2\@\@$bedDat2[$ii][BED_INFO]\n";
+    }
+    $newId++;
+}
+
+##
+## Subroutines
+##
+sub loadBed {
+    my ($bedFile) = @_;
+
+    my @dat = ();
+    open(BED, "<$bedFile")
+        or die("Failed to open $bedFile for reading: $!");
+
+    while(<BED>) {
+        s/^\s+//;
+        s/\s+$//;
+	next if /^(\s)*$/;
+        next if /^#/;
+
+        my $line = $_;
+        my @fields = split(/\t/, $line);
+
+        die("[ERROR]: Failed to parse 6 fields from: $line! Got " . @fields) if (@fields != 7);
+        push @dat, [ @fields ];
+    }
+    close(BED);
+    return(@dat);
+}
+
+
+## End of file
