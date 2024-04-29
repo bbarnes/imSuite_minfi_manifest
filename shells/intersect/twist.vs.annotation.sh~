@@ -1,0 +1,16 @@
+
+GEN="GRCh37"
+
+TOP="/Users/bretbarnes/Documents"
+EXE="${TOP}/tools/Workhorse-Unstained/scripts/perl/bsc/intersect/intersectAll.pl"
+OUT="${TOP}/Projects/Twist/intersectAll/${GEN}"
+DES="${TOP}/Projects/Twist/manifest/covered_targets_Twist_Methylome_hg19_annotated_collapsed_uniq_final.bed.gz"
+ANN="${TOP}/data/workhorse/annotation/Homo_sapiens/${GEN}"
+
+mkdir -p ${OUT}
+
+REG="${ANN}/EPIC_CORE_CLEAN/UCSC/cpgIslands.bed.gz"
+${EXE} -o ${OUT} -d ${DES} -r ${REG}
+
+
+# End of file
